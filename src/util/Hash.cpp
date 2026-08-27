@@ -117,6 +117,47 @@ bool Sha256File(const std::wstring& path, Sha256Digest& out)
     return ok && h.Finish(out);
 }
 
+bool Sha256FileRange(const std::wstring& path, uint64_t offset, uint64_t length,
+                     Sha256Digest& out)
+{
+    HANDLE file = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+
+    LARGE_INTEGER pos{};
+    pos.QuadPart = static_cast<LONGLONG>(offset);
+    if (!::SetFilePointerEx(file, pos, nullptr, FILE_BEGIN))
+    {
+        ::CloseHandle(file);
+        return false;
+    }
+
+    HashObject h(Sha256Provider(), nullptr, 0);
+    std::vector<unsigned char> buf(64 * 1024);
+    uint64_t remaining = length;
+    bool ok = true;
+    while (remaining > 0)
+    {
+        DWORD want = static_cast<DWORD>(remaining < buf.size() ? remaining : buf.size());
+        DWORD read = 0;
+        if (!::ReadFile(file, buf.data(), want, &read, nullptr) || read == 0)
+        {
+            // A short read means the file no longer covers the requested range.
+            ok = false;
+            break;
+        }
+        if (!h.Update(buf.data(), read))
+        {
+            ok = false;
+            break;
+        }
+        remaining -= read;
+    }
+    ::CloseHandle(file);
+    return ok && h.Finish(out);
+}
+
 Sha256Digest HmacSha256(const void* key, size_t keyLen, std::string_view data)
 {
     Sha256Digest out{};

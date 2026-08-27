@@ -23,6 +23,8 @@ const wchar_t* TransferOpName(TransferOp op)
     case TransferOp::Delete: return L"Delete";
     case TransferOp::Copy: return L"Copy";
     case TransferOp::TestConnection: return L"Connect";
+    case TransferOp::ListMultipartUploads: return L"List Uploads";
+    case TransferOp::AbortMultipartUpload: return L"Abort Upload";
     }
     return L"?";
 }
@@ -227,6 +229,7 @@ void TransferManager::Execute(Job& job)
 
     S3Client client(job.req.s3);
     client.SetCancelFlag(&job.cancelled);
+    client.SetUploadJournal(m_journal);
 
     // Throttled progress relay: at most ~10 events/sec.
     ULONGLONG lastTick = 0;
@@ -323,6 +326,21 @@ void TransferManager::Execute(Job& job)
     case TransferOp::TestConnection:
     {
         auto r = client.TestConnection(job.req.bucket);
+        ok = r.ok;
+        error = r.error;
+        break;
+    }
+    case TransferOp::ListMultipartUploads:
+    {
+        auto r = client.ListMultipartUploads(job.req.bucket, job.req.prefix);
+        ok = r.ok;
+        error = r.error;
+        result->uploads = std::move(r.value);
+        break;
+    }
+    case TransferOp::AbortMultipartUpload:
+    {
+        auto r = client.AbortMultipartUpload(job.req.bucket, job.req.key, job.req.uploadId);
         ok = r.ok;
         error = r.error;
         break;

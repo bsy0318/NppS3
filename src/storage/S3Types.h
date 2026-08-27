@@ -52,4 +52,35 @@ struct PutObjectResult
     std::string versionId;
 };
 
+// ------------------------------------------------------------------ multipart
+
+struct MultipartPart
+{
+    int partNumber = 0;   // 1-based, as required by S3
+    uint64_t size = 0;
+    std::string etag;     // opaque; only compared for equality, never as an MD5
+};
+
+struct ListPartsResult
+{
+    std::vector<MultipartPart> parts;
+    bool isTruncated = false;
+    int nextPartNumberMarker = 0;
+};
+
+struct MultipartUploadInfo
+{
+    std::string key;
+    std::string uploadId;
+    std::string initiated; // ISO 8601
+};
+
+struct ListMultipartUploadsResult
+{
+    std::vector<MultipartUploadInfo> uploads;
+    bool isTruncated = false;
+    std::string nextKeyMarker;
+    std::string nextUploadIdMarker;
+};
+
 } // namespace npps3

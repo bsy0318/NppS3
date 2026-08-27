@@ -7,6 +7,7 @@
 #include "IObjectStorage.h"
 
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -25,6 +26,10 @@ struct HttpRequest
     // Request body: at most one of these is used.
     const std::string* bodyMem = nullptr; // borrowed; must outlive the call
     std::wstring bodyFile;                // streamed from disk when non-empty
+    // Byte range of bodyFile to send. bodyFileLength == 0 means "to EOF".
+    // Multipart uploads use this to send one part without copying it out.
+    uint64_t bodyFileOffset = 0;
+    uint64_t bodyFileLength = 0;
 
     // Response body sink: written to this file when non-empty and status < 300,
     // otherwise collected in HttpResponse::body (error payloads are small XML).

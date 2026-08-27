@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -18,6 +19,11 @@ Sha256Digest Sha256(std::string_view data);
 
 // Streams a file through SHA-256; returns false on I/O failure.
 bool Sha256File(const std::wstring& path, Sha256Digest& out);
+
+// SHA-256 of [offset, offset+length) of a file. Used to sign individual
+// multipart parts without loading them into memory.
+bool Sha256FileRange(const std::wstring& path, uint64_t offset, uint64_t length,
+                     Sha256Digest& out);
 
 Sha256Digest HmacSha256(const void* key, size_t keyLen, std::string_view data);
 

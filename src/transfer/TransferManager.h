@@ -25,6 +25,8 @@ enum class TransferOp
     Delete,
     Copy,
     TestConnection,
+    ListMultipartUploads,
+    AbortMultipartUpload,
 };
 
 enum class TransferState
@@ -50,9 +52,10 @@ struct TransferRequest
     std::wstring localPath;    // Download/Upload
     std::string contentType;   // Upload
     std::string data;          // UploadBytes payload
-    std::string prefix;        // List
+    std::string prefix;        // List / ListMultipartUploads
     std::string delimiter;     // List
     std::string continuationToken;
+    std::string uploadId;      // AbortMultipartUpload
     int maxKeys = 1000;
     unsigned long long context = 0; // caller correlation token (e.g. tree item)
     // Human-readable label for the transfer list. Set by the caller so the
@@ -66,6 +69,7 @@ struct TransferResultData
     ListObjectsResult listing;
     ObjectMetadata metadata;
     PutObjectResult put;
+    std::vector<MultipartUploadInfo> uploads;
 };
 
 struct TransferEvent
@@ -107,6 +111,10 @@ public:
     TransferManager(const TransferManager&) = delete;
     TransferManager& operator=(const TransferManager&) = delete;
 
+    // Resume journal shared by every upload job. Borrowed; must outlive the
+    // manager. Set before Start().
+    void SetUploadJournal(IUploadJournal* journal) { m_journal = journal; }
+
     void Start();
     // Prevents new work, cancels queued+running jobs, joins workers.
     // Safe to call more than once. Must be called before the observer dies.
@@ -138,6 +146,7 @@ private:
     static std::wstring LabelFor(const TransferRequest& req);
 
     ITransferObserver* m_observer;
+    IUploadJournal* m_journal = nullptr;
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
     std::deque<JobPtr> m_queue[2];

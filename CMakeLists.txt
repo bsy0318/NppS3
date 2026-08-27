@@ -61,6 +61,8 @@ add_library(npps3_core STATIC
     src/storage/HttpClient.cpp
     src/storage/S3Xml.cpp
     src/storage/S3Client.cpp
+    src/storage/MultipartUpload.cpp
+    src/storage/UploadJournal.cpp
     src/security/CredentialStore.cpp
     src/config/ProfileManager.cpp
     src/cache/CacheManager.cpp
@@ -101,6 +103,7 @@ add_executable(npps3_tests
     tests/unit/test_profiles.cpp
     tests/unit/test_cache.cpp
     tests/unit/test_documents.cpp
+    tests/unit/test_multipart.cpp
 )
 target_link_libraries(npps3_tests PRIVATE npps3_core)
 target_include_directories(npps3_tests PRIVATE third_party/doctest src)

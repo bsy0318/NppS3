@@ -63,6 +63,42 @@ public:
 
     // Cheap authenticated call used to validate credentials/endpoint.
     virtual VoidResult TestConnection(const std::string& bucket) = 0;
+
+    // ------------------------------------------------------------- multipart
+    // Raw S3 multipart operations. PutObject drives these automatically for
+    // large files; they are exposed so resume and cleanup can be orchestrated
+    // and tested independently.
+
+    virtual Outcome<std::string> CreateMultipartUpload(const std::string& bucket,
+                                                       const std::string& key,
+                                                       const std::string& contentType) = 0;
+
+    // Sends [offset, offset+length) of localPath as part `partNumber`.
+    virtual Outcome<MultipartPart> UploadPart(const std::string& bucket,
+                                              const std::string& key,
+                                              const std::string& uploadId,
+                                              int partNumber,
+                                              const std::wstring& localPath,
+                                              uint64_t offset,
+                                              uint64_t length,
+                                              const ProgressFn& progress) = 0;
+
+    virtual Outcome<PutObjectResult> CompleteMultipartUpload(
+        const std::string& bucket, const std::string& key, const std::string& uploadId,
+        const std::vector<MultipartPart>& parts) = 0;
+
+    virtual VoidResult AbortMultipartUpload(const std::string& bucket,
+                                            const std::string& key,
+                                            const std::string& uploadId) = 0;
+
+    // All parts already stored for an upload id (pagination handled inside).
+    virtual Outcome<std::vector<MultipartPart>> ListParts(const std::string& bucket,
+                                                          const std::string& key,
+                                                          const std::string& uploadId) = 0;
+
+    // Uploads started but never completed or aborted, under `prefix`.
+    virtual Outcome<std::vector<MultipartUploadInfo>> ListMultipartUploads(
+        const std::string& bucket, const std::string& prefix) = 0;
 };
 
 } // namespace npps3

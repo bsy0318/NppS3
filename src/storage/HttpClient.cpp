@@ -70,6 +70,12 @@ public:
         m_size = static_cast<uint64_t>(sz.QuadPart);
         return true;
     }
+    bool Seek(uint64_t offset)
+    {
+        LARGE_INTEGER pos{};
+        pos.QuadPart = static_cast<LONGLONG>(offset);
+        return ::SetFilePointerEx(m_file, pos, nullptr, FILE_BEGIN) != 0;
+    }
     ~FileReader() { if (m_file != INVALID_HANDLE_VALUE) ::CloseHandle(m_file); }
     uint64_t Size() const { return m_size; }
     bool Read(void* buf, DWORD want, DWORD& got)
@@ -189,18 +195,39 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
             e.message = "Cannot open local file for upload";
             return VoidResult::Failure(e);
         }
-        bodyLen = fileBody.Size();
+        const uint64_t fileSize = fileBody.Size();
+        if (req.bodyFileOffset > fileSize)
+        {
+            StorageError e;
+            e.kind = ErrorKind::LocalIo;
+            e.message = "Local file is shorter than the requested upload range";
+            return VoidResult::Failure(e);
+        }
+        const uint64_t available = fileSize - req.bodyFileOffset;
+        bodyLen = req.bodyFileLength == 0 ? available
+                                          : std::min<uint64_t>(req.bodyFileLength, available);
+        if (req.bodyFileOffset != 0 && !fileBody.Seek(req.bodyFileOffset))
+        {
+            StorageError e;
+            e.kind = ErrorKind::LocalIo;
+            e.win32 = ::GetLastError();
+            e.message = "Cannot seek to the requested upload range";
+            return VoidResult::Failure(e);
+        }
     }
     else if (req.bodyMem)
     {
         bodyLen = req.bodyMem->size();
     }
 
+    // WinHttpSendRequest takes a DWORD content length, so a single request can
+    // never carry 4 GiB. Larger objects go through multipart upload, which
+    // splits them into parts far below this bound.
     if (bodyLen > 0xFFFFFFFFull)
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
-        e.message = "Uploads larger than 4 GiB require multipart (not yet supported)";
+        e.message = "Request body exceeds the 4 GiB limit of a single HTTP request";
         return VoidResult::Failure(e);
     }
 
@@ -220,8 +247,9 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
             {
                 if (IsCancelled(req))
                     return VoidResult::Failure(CancelledError());
+                DWORD want = static_cast<DWORD>(std::min<uint64_t>(kChunkSize, bodyLen - sent));
                 DWORD got = 0;
-                if (!fileBody.Read(buf.data(), kChunkSize, got))
+                if (!fileBody.Read(buf.data(), want, got))
                 {
                     StorageError e;
                     e.kind = ErrorKind::LocalIo;

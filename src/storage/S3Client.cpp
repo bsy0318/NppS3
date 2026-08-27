@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "S3Client.h"
+#include "MultipartUpload.h"
 #include "S3Xml.h"
 
 #include "../util/Hash.h"
@@ -20,6 +21,20 @@ std::string StripQuotes(std::string s)
     if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
         return s.substr(1, s.size() - 2);
     return s;
+}
+
+// Size and last-write time in one open, so an upload plan and its resume guard
+// describe the same snapshot of the file.
+bool StatLocalFile(const std::wstring& path, uint64_t& size, unsigned long long& writeTime)
+{
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    if (!::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info))
+        return false;
+    ULARGE_INTEGER sz{info.nFileSizeLow, info.nFileSizeHigh};
+    ULARGE_INTEGER wt{info.ftLastWriteTime.dwLowDateTime, info.ftLastWriteTime.dwHighDateTime};
+    size = sz.QuadPart;
+    writeTime = wt.QuadPart;
+    return true;
 }
 
 } // namespace
@@ -220,6 +235,8 @@ VoidResult S3Client::Send(const RequestSpec& spec, HttpResponse& resp)
         hreq.headers.emplace_back(Utf8ToWide(k), Utf8ToWide(v));
     hreq.bodyMem = spec.bodyMem;
     hreq.bodyFile = spec.bodyFile;
+    hreq.bodyFileOffset = spec.bodyFileOffset;
+    hreq.bodyFileLength = spec.bodyFileLength;
     hreq.sinkFile = spec.sinkFile;
     hreq.progress = spec.progress;
     hreq.cancel = m_cancel;
@@ -390,11 +407,47 @@ Outcome<ObjectMetadata> S3Client::DownloadObject(const std::string& bucket,
     return Outcome<ObjectMetadata>::Success(std::move(md));
 }
 
+std::string S3Client::JournalScope() const
+{
+    return IUploadJournal::ScopeFor(m_config.endpoint, m_config.accessKeyId);
+}
+
 Outcome<PutObjectResult> S3Client::PutObject(const std::string& bucket,
                                              const std::string& key,
                                              const std::wstring& localPath,
                                              const std::string& contentType,
                                              const ProgressFn& progress)
+{
+    uint64_t fileSize = 0;
+    unsigned long long fileTime = 0;
+    if (!StatLocalFile(localPath, fileSize, fileTime))
+    {
+        StorageError e;
+        e.kind = ErrorKind::LocalIo;
+        e.win32 = ::GetLastError();
+        e.message = "Cannot read local file for upload";
+        return Outcome<PutObjectResult>::Failure(e);
+    }
+
+    // Small objects stay on the single-request path: it is one round trip and
+    // needs no server-side cleanup if it fails.
+    if (fileSize < m_config.multipartThreshold || fileSize == 0)
+        return PutObjectSingle(bucket, key, localPath, contentType, progress);
+
+    auto plan = PlanMultipartUpload(fileSize, m_config.multipartPartSize);
+    if (!plan.ok)
+        return Outcome<PutObjectResult>::Failure(plan.error);
+
+    MultipartUploader uploader(*this, m_journal, JournalScope());
+    return uploader.Upload(bucket, key, localPath, contentType, fileSize, fileTime,
+                           plan.value, progress);
+}
+
+Outcome<PutObjectResult> S3Client::PutObjectSingle(const std::string& bucket,
+                                                   const std::string& key,
+                                                   const std::wstring& localPath,
+                                                   const std::string& contentType,
+                                                   const ProgressFn& progress)
 {
     Sha256Digest digest{};
     if (!Sha256File(localPath, digest))
@@ -513,6 +566,220 @@ VoidResult S3Client::TestConnection(const std::string& bucket)
     }
     auto r = ListObjects(bucket, "", "/", "", 1);
     return r.ok ? VoidResult::Success() : VoidResult::Failure(r.error);
+}
+
+// ------------------------------------------------------------------ multipart
+
+Outcome<std::string> S3Client::CreateMultipartUpload(const std::string& bucket,
+                                                     const std::string& key,
+                                                     const std::string& contentType)
+{
+    RequestSpec spec;
+    spec.method = "POST";
+    spec.bucket = bucket;
+    spec.key = key;
+    spec.query.emplace("uploads", "");
+    if (!contentType.empty())
+        spec.extraHeaders["content-type"] = contentType;
+
+    HttpResponse resp;
+    // Retrying would leave an orphan upload behind, so this one is sent once.
+    VoidResult r = SendWithRetry(spec, resp, false);
+    if (!r.ok)
+        return Outcome<std::string>::Failure(r.error);
+
+    auto uploadId = ParseInitiateMultipartUpload(resp.body);
+    if (!uploadId)
+    {
+        StorageError e;
+        e.kind = ErrorKind::Internal;
+        e.message = "Malformed InitiateMultipartUpload response";
+        return Outcome<std::string>::Failure(e);
+    }
+    return Outcome<std::string>::Success(std::move(*uploadId));
+}
+
+Outcome<MultipartPart> S3Client::UploadPart(const std::string& bucket, const std::string& key,
+                                            const std::string& uploadId, int partNumber,
+                                            const std::wstring& localPath, uint64_t offset,
+                                            uint64_t length, const ProgressFn& progress)
+{
+    Sha256Digest digest{};
+    if (!Sha256FileRange(localPath, offset, length, digest))
+    {
+        StorageError e;
+        e.kind = ErrorKind::LocalIo;
+        e.win32 = ::GetLastError();
+        e.message = "Cannot read local file range for upload";
+        return Outcome<MultipartPart>::Failure(e);
+    }
+
+    RequestSpec spec;
+    spec.method = "PUT";
+    spec.bucket = bucket;
+    spec.key = key;
+    spec.query.emplace("partNumber", std::to_string(partNumber));
+    spec.query.emplace("uploadId", uploadId);
+    spec.payloadHash = HexLower(digest.data(), digest.size());
+    spec.bodyFile = localPath;
+    spec.bodyFileOffset = offset;
+    spec.bodyFileLength = length;
+    spec.progress = progress;
+
+    HttpResponse resp;
+    // Re-sending the same part number overwrites it, so retries are safe.
+    VoidResult r = SendWithRetry(spec, resp, true);
+    if (!r.ok)
+        return Outcome<MultipartPart>::Failure(r.error);
+
+    MultipartPart part;
+    part.partNumber = partNumber;
+    part.size = length;
+    auto it = resp.headers.find("etag");
+    if (it != resp.headers.end())
+        part.etag = StripQuotes(it->second);
+    if (part.etag.empty())
+    {
+        StorageError e;
+        e.kind = ErrorKind::Internal;
+        e.message = "UploadPart response carried no ETag";
+        return Outcome<MultipartPart>::Failure(e);
+    }
+    return Outcome<MultipartPart>::Success(std::move(part));
+}
+
+Outcome<PutObjectResult> S3Client::CompleteMultipartUpload(
+    const std::string& bucket, const std::string& key, const std::string& uploadId,
+    const std::vector<MultipartPart>& parts)
+{
+    const std::string body = BuildCompleteMultipartUploadXml(parts);
+
+    RequestSpec spec;
+    spec.method = "POST";
+    spec.bucket = bucket;
+    spec.key = key;
+    spec.query.emplace("uploadId", uploadId);
+    spec.payloadHash = Sha256Hex(body);
+    spec.bodyMem = &body;
+    spec.extraHeaders["content-type"] = "application/xml";
+
+    HttpResponse resp;
+    VoidResult r = SendWithRetry(spec, resp, false);
+    if (!r.ok)
+        return Outcome<PutObjectResult>::Failure(r.error);
+
+    // Like CopyObject, this can answer HTTP 200 with an <Error> body because
+    // the service starts streaming before the assembly finishes.
+    if (auto err = ParseErrorBody(resp.body))
+    {
+        StorageError e;
+        e.httpStatus = resp.status;
+        e.s3Code = err->code;
+        e.message = err->message;
+        e.kind = ClassifyS3Error(resp.status, e.s3Code);
+        return Outcome<PutObjectResult>::Failure(e);
+    }
+
+    PutObjectResult out;
+    if (auto etag = ParseCompleteMultipartUpload(resp.body))
+        out.etag = *etag;
+    auto it = resp.headers.find("x-amz-version-id");
+    if (it != resp.headers.end())
+        out.versionId = it->second;
+    return Outcome<PutObjectResult>::Success(std::move(out));
+}
+
+VoidResult S3Client::AbortMultipartUpload(const std::string& bucket, const std::string& key,
+                                          const std::string& uploadId)
+{
+    RequestSpec spec;
+    spec.method = "DELETE";
+    spec.bucket = bucket;
+    spec.key = key;
+    spec.query.emplace("uploadId", uploadId);
+
+    HttpResponse resp;
+    return SendWithRetry(spec, resp, true);
+}
+
+Outcome<std::vector<MultipartPart>> S3Client::ListParts(const std::string& bucket,
+                                                        const std::string& key,
+                                                        const std::string& uploadId)
+{
+    std::vector<MultipartPart> all;
+    int marker = 0;
+    for (int page = 0; page < 200; ++page) // 200 * 1000 parts covers the 10k cap
+    {
+        RequestSpec spec;
+        spec.method = "GET";
+        spec.bucket = bucket;
+        spec.key = key;
+        spec.query.emplace("uploadId", uploadId);
+        spec.query.emplace("max-parts", "1000");
+        if (marker > 0)
+            spec.query.emplace("part-number-marker", std::to_string(marker));
+
+        HttpResponse resp;
+        VoidResult r = SendWithRetry(spec, resp, true);
+        if (!r.ok)
+            return Outcome<std::vector<MultipartPart>>::Failure(r.error);
+
+        auto parsed = ParseListParts(resp.body);
+        if (!parsed)
+        {
+            StorageError e;
+            e.kind = ErrorKind::Internal;
+            e.message = "Malformed ListParts response";
+            return Outcome<std::vector<MultipartPart>>::Failure(e);
+        }
+        all.insert(all.end(), parsed->parts.begin(), parsed->parts.end());
+        if (!parsed->isTruncated || parsed->nextPartNumberMarker <= marker)
+            break;
+        marker = parsed->nextPartNumberMarker;
+    }
+    return Outcome<std::vector<MultipartPart>>::Success(std::move(all));
+}
+
+Outcome<std::vector<MultipartUploadInfo>> S3Client::ListMultipartUploads(
+    const std::string& bucket, const std::string& prefix)
+{
+    std::vector<MultipartUploadInfo> all;
+    std::string keyMarker;
+    std::string uploadIdMarker;
+    for (int page = 0; page < 100; ++page)
+    {
+        RequestSpec spec;
+        spec.method = "GET";
+        spec.bucket = bucket;
+        spec.query.emplace("uploads", "");
+        spec.query.emplace("max-uploads", "1000");
+        if (!prefix.empty())
+            spec.query.emplace("prefix", prefix);
+        if (!keyMarker.empty())
+            spec.query.emplace("key-marker", keyMarker);
+        if (!uploadIdMarker.empty())
+            spec.query.emplace("upload-id-marker", uploadIdMarker);
+
+        HttpResponse resp;
+        VoidResult r = SendWithRetry(spec, resp, true);
+        if (!r.ok)
+            return Outcome<std::vector<MultipartUploadInfo>>::Failure(r.error);
+
+        auto parsed = ParseListMultipartUploads(resp.body);
+        if (!parsed)
+        {
+            StorageError e;
+            e.kind = ErrorKind::Internal;
+            e.message = "Malformed ListMultipartUploads response";
+            return Outcome<std::vector<MultipartUploadInfo>>::Failure(e);
+        }
+        all.insert(all.end(), parsed->uploads.begin(), parsed->uploads.end());
+        if (!parsed->isTruncated || parsed->nextKeyMarker.empty())
+            break;
+        keyMarker = parsed->nextKeyMarker;
+        uploadIdMarker = parsed->nextUploadIdMarker;
+    }
+    return Outcome<std::vector<MultipartUploadInfo>>::Success(std::move(all));
 }
 
 } // namespace npps3
