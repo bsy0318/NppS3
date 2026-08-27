@@ -6,6 +6,9 @@
 //   s3cli get <bucket> <key> <localfile>     download a file
 //   s3cli del <bucket> <key>                 delete an object
 //   s3cli head <bucket> <key>               print etag/size (exit 2 if absent)
+//   s3cli mpucreate <bucket> <key>          start a multipart upload, print id
+//   s3cli mpulist <bucket> <prefix>         list incomplete multipart uploads
+//   s3cli mpuabort <bucket> <key> <id>      abort one incomplete upload
 //   s3cli cachepath <profileId> <bucket> <key> <cacheRoot>
 //        print the plugin's deterministic cache path for the object
 //   s3cli storecred <profileId>             store NPPS3_TEST secret in
@@ -165,6 +168,34 @@ int wmain(int argc, wchar_t** argv)
             token = r.value.isTruncated ? r.value.nextContinuationToken : std::string();
         } while (!token.empty());
         return 0;
+    }
+    if (op == "mpucreate" && argc == 4)
+    {
+        std::string key = WideToUtf8(argv[3]);
+        auto r = client.CreateMultipartUpload(WideToUtf8(argv[2]), key, MimeTypeForKey(key));
+        std::printf(r.ok ? "ok %s\n" : "FAIL %s\n",
+                    r.ok ? r.value.c_str() : r.error.Describe().c_str());
+        return r.ok ? 0 : 1;
+    }
+    if (op == "mpulist" && argc == 4)
+    {
+        auto r = client.ListMultipartUploads(WideToUtf8(argv[2]), WideToUtf8(argv[3]));
+        if (!r.ok)
+        {
+            std::printf("FAIL %s\n", r.error.Describe().c_str());
+            return 1;
+        }
+        for (const auto& u : r.value)
+            std::printf("%s\t%s\n", u.key.c_str(), u.uploadId.c_str());
+        std::printf("count=%zu\n", r.value.size());
+        return 0;
+    }
+    if (op == "mpuabort" && argc == 5)
+    {
+        VoidResult r = client.AbortMultipartUpload(WideToUtf8(argv[2]), WideToUtf8(argv[3]),
+                                                   WideToUtf8(argv[4]));
+        std::printf(r.ok ? "ok\n" : "FAIL %s\n", r.ok ? "" : r.error.Describe().c_str());
+        return r.ok ? 0 : 1;
     }
     if (op == "head" && argc == 4)
     {

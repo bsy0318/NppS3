@@ -10,7 +10,9 @@
 
 #include "cache/CacheManager.h"
 #include "documents/RemoteDocumentManager.h"
+#include "storage/MultipartUpload.h"
 #include "storage/S3Client.h"
+#include "storage/UploadJournal.h"
 #include "transfer/TransferManager.h"
 #include "util/Mime.h"
 #include "util/StringUtil.h"
@@ -119,6 +121,58 @@ std::string ReadLocalFile(const std::wstring& path)
     return ss.str();
 }
 
+// Non-repeating content so a part written at the wrong offset would show up as
+// a content mismatch rather than silently matching.
+std::string MakePayload(size_t bytes)
+{
+    std::string out;
+    out.reserve(bytes);
+    unsigned int state = 0x9e3779b9u;
+    while (out.size() < bytes)
+    {
+        state = state * 1664525u + 1013904223u;
+        out.push_back(static_cast<char>(state >> 24));
+    }
+    return out;
+}
+
+bool StatFile(const std::wstring& path, uint64_t& size, unsigned long long& writeTime)
+{
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    if (!::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info))
+        return false;
+    ULARGE_INTEGER sz{info.nFileSizeLow, info.nFileSizeHigh};
+    ULARGE_INTEGER wt{info.ftLastWriteTime.dwLowDateTime, info.ftLastWriteTime.dwHighDateTime};
+    size = sz.QuadPart;
+    writeTime = wt.QuadPart;
+    return true;
+}
+
+// Writes `bytes` of pattern data without holding it all in memory.
+bool WriteLargeFile(const std::wstring& path, uint64_t bytes)
+{
+    HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    const std::string chunk = MakePayload(4 * 1024 * 1024);
+    uint64_t written = 0;
+    bool ok = true;
+    while (written < bytes)
+    {
+        DWORD want = static_cast<DWORD>(std::min<uint64_t>(chunk.size(), bytes - written));
+        DWORD got = 0;
+        if (!::WriteFile(file, chunk.data(), want, &got, nullptr) || got != want)
+        {
+            ok = false;
+            break;
+        }
+        written += got;
+    }
+    ::CloseHandle(file);
+    return ok;
+}
+
 // Collects transfer events for the async pipeline test.
 class EventCollector : public ITransferObserver
 {
@@ -181,6 +235,9 @@ int main(int argc, char** argv)
     const std::string accessKey = resolve("NPPS3_TEST_ACCESS_KEY_ID");
     const std::string secretKey = resolve("NPPS3_TEST_SECRET_ACCESS_KEY");
     const std::string bucket = resolve("NPPS3_TEST_BUCKET");
+    std::string region = resolve("NPPS3_TEST_REGION");
+    if (region.empty())
+        region = "auto"; // R2 default; MinIO accepts any region
 
     if (endpoint.empty() || accessKey.empty() || secretKey.empty() || bucket.empty())
     {
@@ -188,13 +245,13 @@ int main(int argc, char** argv)
         return 77; // conventional "skipped" exit code
     }
 
-    std::printf("NppS3 R2 integration tests\n");
-    std::printf("Access key: %s  Bucket: %s\n",
-                MaskSensitive(accessKey).c_str(), MaskSensitive(bucket).c_str());
+    std::printf("NppS3 S3/R2 integration tests\n");
+    std::printf("Access key: %s  Bucket: %s  Region: %s\n",
+                MaskSensitive(accessKey).c_str(), MaskSensitive(bucket).c_str(), region.c_str());
 
     S3Config cfg;
     cfg.endpoint = endpoint;
-    cfg.region = "auto";
+    cfg.region = region;
     cfg.accessKeyId = accessKey;
     cfg.secretAccessKey = secretKey;
     cfg.pathStyle = true;
@@ -532,6 +589,278 @@ int main(int argc, char** argv)
                !h.ok && h.error.kind == ErrorKind::NoSuchKey);
     }
 
+    // --- 14. Multipart upload ------------------------------------------------
+    // 5 MiB is the S3/R2 minimum part size, so a 12 MiB object with a 5 MiB
+    // part size exercises a real 3-part upload without moving gigabytes.
+    S3Config mpCfg = cfg;
+    mpCfg.multipartThreshold = 6 * 1024 * 1024;
+    mpCfg.multipartPartSize = 5 * 1024 * 1024;
+    S3Client mpClient(mpCfg);
+
+    const std::string mpKey = runPrefix + "multipart/large.bin";
+    const std::wstring mpLocal = tmpDir + L"\\large.bin";
+    std::string mpContent = MakePayload(12 * 1024 * 1024);
+    {
+        bool wrote = WriteLocalFile(mpLocal, mpContent);
+
+        uint64_t lastTransferred = 0, lastTotal = 0;
+        auto r = mpClient.PutObject(bucket, mpKey, mpLocal, "application/octet-stream",
+                                    [&](uint64_t t, uint64_t total) {
+                                        lastTransferred = t;
+                                        lastTotal = total;
+                                        return true;
+                                    });
+        if (r.ok)
+            createdKeys.push_back(mpKey);
+        Report("Multipart upload (12 MiB / 5 MiB parts)", wrote && r.ok,
+               r.ok ? "" : r.error.Describe());
+        Report("Multipart progress reaches the full object size",
+               lastTransferred == mpContent.size() && lastTotal == mpContent.size());
+
+        auto h = mpClient.HeadObject(bucket, mpKey);
+        Report("Multipart object has the expected size",
+               h.ok && h.value.size == mpContent.size(), h.ok ? "" : h.error.Describe());
+
+        std::wstring back = tmpDir + L"\\large-down.bin";
+        auto g = mpClient.DownloadObject(bucket, mpKey, back, nullptr);
+        Report("Multipart object downloads byte-identical",
+               g.ok && ReadLocalFile(back) == mpContent, g.ok ? "" : g.error.Describe());
+    }
+
+    // --- 15. Resuming an interrupted multipart upload ------------------------
+    {
+        const std::string key = runPrefix + "multipart/resumable.bin";
+        const std::wstring local = tmpDir + L"\\resumable.bin";
+        std::string content = MakePayload(15 * 1024 * 1024);
+        WriteLocalFile(local, content);
+
+        uint64_t fileSize = 0;
+        unsigned long long fileTime = 0;
+        StatFile(local, fileSize, fileTime);
+
+        FileUploadJournal journal;
+        journal.SetFile(tmpDir + L"\\uploads.xml");
+        const std::string scope = IUploadJournal::ScopeFor(endpoint, accessKey);
+
+        // Interrupt after the first part: create the upload, send part 1, then
+        // stop exactly the way a cancelled or crashed transfer would.
+        auto plan = PlanMultipartUpload(fileSize, 5 * 1024 * 1024);
+        bool prepared = plan.ok;
+        std::string uploadId;
+        if (prepared)
+        {
+            auto created = mpClient.CreateMultipartUpload(bucket, key, "application/octet-stream");
+            prepared = created.ok;
+            if (created.ok)
+            {
+                uploadId = created.value;
+                UploadJournalEntry entry;
+                entry.scope = scope;
+                entry.bucket = bucket;
+                entry.key = key;
+                entry.uploadId = uploadId;
+                entry.localPath = local;
+                entry.fileSize = fileSize;
+                entry.fileTime = fileTime;
+                entry.partSize = plan.value.partSize;
+                journal.Begin(entry);
+
+                auto part1 = mpClient.UploadPart(bucket, key, uploadId, 1, local, 0,
+                                                 PartLength(plan.value, fileSize, 1), nullptr);
+                prepared = part1.ok;
+                if (part1.ok)
+                    journal.RecordPart(scope, bucket, key, part1.value);
+            }
+        }
+        Report("Resume setup: upload interrupted after part 1", prepared);
+
+        // The service must already hold that part.
+        auto listed = mpClient.ListParts(bucket, key, uploadId);
+        Report("ListParts sees the part uploaded before the interruption",
+               listed.ok && listed.value.size() == 1 && listed.value[0].partNumber == 1,
+               listed.ok ? "" : listed.error.Describe());
+
+        // Now upload normally: the journal must make it continue, not restart.
+        S3Client resumeClient(mpCfg);
+        resumeClient.SetUploadJournal(&journal);
+        uint64_t firstProgress = 0;
+        bool sawProgress = false;
+        auto r = resumeClient.PutObject(bucket, key, local, "application/octet-stream",
+                                        [&](uint64_t t, uint64_t) {
+                                            if (!sawProgress) { firstProgress = t; sawProgress = true; }
+                                            return true;
+                                        });
+        if (r.ok)
+            createdKeys.push_back(key);
+        Report("Interrupted multipart upload resumes and completes", r.ok,
+               r.ok ? "" : r.error.Describe());
+        Report("Resumed upload skips the part already stored",
+               sawProgress && firstProgress == PartLength(plan.value, fileSize, 1));
+
+        std::wstring back = tmpDir + L"\\resumable-down.bin";
+        auto g = mpClient.DownloadObject(bucket, key, back, nullptr);
+        Report("Resumed object is byte-identical to the local file",
+               g.ok && ReadLocalFile(back) == content, g.ok ? "" : g.error.Describe());
+        Report("Journal entry is cleared once the upload completes",
+               !journal.Find(scope, bucket, key).has_value());
+    }
+
+    // --- 16. Listing and aborting incomplete uploads -------------------------
+    {
+        const std::string key = runPrefix + "multipart/abandoned.bin";
+        auto created = mpClient.CreateMultipartUpload(bucket, key, "application/octet-stream");
+
+        auto matches = [&](const Outcome<std::vector<MultipartUploadInfo>>& r) {
+            if (!r.ok)
+                return false;
+            for (const auto& u : r.value)
+                if (u.key == key && u.uploadId == created.value)
+                    return true;
+            return false;
+        };
+
+        // Querying by the exact key works on every provider tested; MinIO
+        // resolves upload metadata by hashing the full object path and returns
+        // nothing for a partial prefix, while AWS S3 and R2 accept both.
+        auto exact = mpClient.ListMultipartUploads(bucket, key);
+        Report("ListMultipartUploads finds the abandoned upload (exact key)",
+               created.ok && matches(exact), exact.ok ? "" : exact.error.Describe());
+
+        auto broad = mpClient.ListMultipartUploads(bucket, runPrefix);
+        std::printf("[INFO] Prefix-scoped ListMultipartUploads: %s\n",
+                    !broad.ok ? "not permitted"
+                              : (matches(broad) ? "supported" : "not supported by this provider"));
+
+        VoidResult aborted = created.ok
+            ? mpClient.AbortMultipartUpload(bucket, key, created.value)
+            : VoidResult::Failure({});
+        auto after = mpClient.ListMultipartUploads(bucket, key);
+        Report("AbortMultipartUpload removes it",
+               aborted.ok && after.ok && !matches(after),
+               aborted.ok ? "" : aborted.error.Describe());
+    }
+
+    // --- 17. Objects larger than 4 GiB (opt-in) ------------------------------
+    // A single HTTP request cannot carry 4 GiB, so this is the case multipart
+    // exists for. It moves 4+ GiB over the wire, so it only runs on request.
+    if (!resolve("NPPS3_TEST_HUGE").empty())
+    {
+        const std::string key = runPrefix + "multipart/huge.bin";
+        const std::wstring local = tmpDir + L"\\huge.bin";
+        const uint64_t hugeSize = 4ull * 1024 * 1024 * 1024 + 1024; // just past 4 GiB
+
+        bool wrote = WriteLargeFile(local, hugeSize);
+        S3Config hugeCfg = cfg;
+        hugeCfg.multipartPartSize = 64ull * 1024 * 1024;
+        S3Client hugeClient(hugeCfg);
+
+        auto r = wrote ? hugeClient.PutObject(bucket, key, local, "application/octet-stream", nullptr)
+                       : Outcome<PutObjectResult>::Failure({});
+        if (r.ok)
+            createdKeys.push_back(key);
+        Report("Upload of an object larger than 4 GiB", wrote && r.ok,
+               r.ok ? "" : r.error.Describe());
+
+        auto h = hugeClient.HeadObject(bucket, key);
+        Report("Object larger than 4 GiB reports the full size",
+               h.ok && h.value.size == hugeSize, h.ok ? "" : h.error.Describe());
+        ::DeleteFileW(local.c_str());
+    }
+    else
+    {
+        std::printf("[SKIP] >4 GiB upload (set NPPS3_TEST_HUGE=1 to run)\n");
+    }
+
+    // --- 18. Recursive prefix listing (backs folder download) ----------------
+    {
+        // Folder download walks the prefix without a delimiter and rebuilds the
+        // local tree from the keys, so the listing must be complete and nested.
+        auto r = client.ListObjects(bucket, runPrefix + "tree/", "", "", 1000);
+        int seen = 0;
+        if (r.ok)
+            for (const auto& o : r.value.objects)
+                if (o.key == runPrefix + "tree/a/1.txt" || o.key == runPrefix + "tree/a/b/2.txt" ||
+                    o.key == runPrefix + "tree/c.txt")
+                    ++seen;
+        Report("Recursive listing returns every key under the prefix", r.ok && seen == 3,
+               r.ok ? "" : r.error.Describe());
+    }
+
+    // --- 19. Folder download: keys to a local tree ---------------------------
+    // Same steps the panel's "Download Folder" runs: page the prefix without a
+    // delimiter, map each key through CacheManager, and write the file.
+    {
+        const std::string folderPrefix = runPrefix + "folder/";
+        struct Entry { const char* suffix; const char* body; };
+        const Entry entries[] = {
+            {"root.txt", "root"},
+            {"sub/one.txt", "one"},
+            {"sub/deeper/two.json", "{\"n\":2}"},
+            {"\xed\x95\x9c\xea\xb8\x80/\xed\x85\x8c\xec\x8a\xa4\xed\x8a\xb8.txt", "korean"},
+            {"weird/a:b?c.txt", "sanitized"},
+        };
+        bool uploaded = true;
+        for (const Entry& e : entries)
+        {
+            std::string key = folderPrefix + e.suffix;
+            auto p = client.PutObjectBytes(bucket, key, e.body, MimeTypeForKey(key));
+            uploaded = uploaded && p.ok;
+            if (p.ok)
+                createdKeys.push_back(key);
+        }
+        Report("Folder download setup: nested tree uploaded", uploaded);
+
+        const std::wstring dest = tmpDir + L"\\folder-download";
+        int downloaded = 0, failed = 0;
+        std::string token;
+        bool listedOk = true;
+        do
+        {
+            auto l = client.ListObjects(bucket, folderPrefix, "", token, 1000);
+            if (!l.ok)
+            {
+                listedOk = false;
+                break;
+            }
+            for (const ObjectInfo& obj : l.value.objects)
+            {
+                std::wstring relative =
+                    CacheManager::RelativePathForKey(obj.key.substr(folderPrefix.size()));
+                if (relative.empty())
+                    continue;
+                std::wstring target = CacheManager::ExtendedPath(dest + L"\\" + relative);
+                if (obj.key.back() == '/')
+                {
+                    CacheManager::EnsureDirectoryTree(target);
+                    continue;
+                }
+                if (!CacheManager::EnsureParentDirs(target))
+                {
+                    ++failed;
+                    continue;
+                }
+                auto g = client.DownloadObject(bucket, obj.key, target, nullptr);
+                g.ok ? ++downloaded : ++failed;
+            }
+            token = l.value.isTruncated ? l.value.nextContinuationToken : std::string();
+        } while (!token.empty());
+
+        Report("Folder download writes every object", listedOk && failed == 0 &&
+                   downloaded == static_cast<int>(std::size(entries)));
+
+        bool contentOk =
+            ReadLocalFile(dest + L"\\root.txt") == "root" &&
+            ReadLocalFile(dest + L"\\sub\\one.txt") == "one" &&
+            ReadLocalFile(dest + L"\\sub\\deeper\\two.json") == "{\"n\":2}" &&
+            ReadLocalFile(dest + L"\\한글\\테스트.txt") == "korean";
+        Report("Folder download rebuilds the nested tree with the right content", contentOk);
+
+        // ':' and '?' cannot appear in a Windows file name; the key still has to
+        // land somewhere predictable rather than fail the whole folder.
+        Report("Folder download sanitizes keys Windows cannot represent",
+               ReadLocalFile(dest + L"\\weird\\a_b_c.txt") == "sanitized");
+    }
+
     // --- Cleanup -------------------------------------------------------------
     {
         int cleaned = 0;
@@ -547,6 +876,17 @@ int main(int argc, char** argv)
             for (const auto& o : l.value.objects)
                 if (client.DeleteObject(bucket, o.key).ok)
                     ++cleaned;
+
+        // Incomplete multipart uploads are invisible to ListObjectsV2 but still
+        // consume storage, so they get their own sweep.
+        auto pending = client.ListMultipartUploads(bucket, runPrefix);
+        int abortedUploads = 0;
+        if (pending.ok)
+            for (const auto& u : pending.value)
+                if (client.AbortMultipartUpload(bucket, u.key, u.uploadId).ok)
+                    ++abortedUploads;
+        if (abortedUploads > 0)
+            std::printf("[INFO] Aborted %d incomplete upload(s)\n", abortedUploads);
         auto post = client.ListObjects(bucket, runPrefix, "", "", 10);
         Report("Cleanup: run namespace empty", post.ok && post.value.objects.empty());
         std::printf("[INFO] Cleaned %d objects under run prefix\n", cleaned);
