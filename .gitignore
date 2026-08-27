@@ -1,0 +1,29 @@
+# Local runtime secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Markdown files are excluded from commits (user policy)
+*.md
+
+# Build output
+build/
+out/
+dist/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+# Visual Studio / editors
+.vs/
+*.user
+*.suo
+CMakeSettings.json
+CMakeUserPresets.json
+
+# Test / runtime artifacts
+Testing/
+*.log
