@@ -31,10 +31,18 @@ public:
     // Returns the number of files removed.
     int CleanupStale(int days, const std::function<bool(const std::wstring&)>& keepPredicate) const;
 
+    // Same, but ignores file age.
+    int RemoveAll(const std::function<bool(const std::wstring&)>& keepPredicate) const;
+
     // Exposed for unit tests.
     static std::wstring SanitizeComponent(const std::wstring& name, size_t maxLen);
 
 private:
+    // Deletes cache files older than the given FILETIME value (as a 64-bit
+    // count), skipping anything keepPredicate protects.
+    int Sweep(unsigned long long cutoffFileTime,
+              const std::function<bool(const std::wstring&)>& keepPredicate) const;
+
     std::wstring m_root;
 };
 

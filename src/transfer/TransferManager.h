@@ -55,6 +55,9 @@ struct TransferRequest
     std::string continuationToken;
     int maxKeys = 1000;
     unsigned long long context = 0; // caller correlation token (e.g. tree item)
+    // Human-readable label for the transfer list. Set by the caller so the
+    // UI never has to show a raw endpoint (which embeds the account id).
+    std::wstring displayLabel;
 };
 
 struct TransferResultData

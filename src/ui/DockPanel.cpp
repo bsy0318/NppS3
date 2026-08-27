@@ -4,6 +4,8 @@
 #include "DockPanel.h"
 
 #include "I18n.h"
+#include "Icons.h"
+#include "../npp/dockingResource.h"
 #include "../plugin/NppS3Plugin.h"
 #include "../util/StringUtil.h"
 
@@ -40,6 +42,8 @@ constexpr int IDM_CTX_UPLOAD_HERE = 3109;
 constexpr int IDM_CTX_REFRESH = 3110;
 constexpr int IDM_CTX_CANCEL = 3111;
 constexpr int IDM_CTX_CLEAR_FINISHED = 3112;
+constexpr int IDM_GEAR_PROFILES = 3113;
+constexpr int IDM_GEAR_SETTINGS = 3114;
 
 std::wstring FormatBytes(uint64_t bytes)
 {
@@ -208,20 +212,33 @@ void DockPanel::OnCreate(HWND hwnd)
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
         0, 0, 100, 200, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_PROFILE)), inst, nullptr);
 
-    auto makeButton = [&](int id, const wchar_t* text) {
-        return ::CreateWindowExW(0, WC_BUTTONW, text,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+    // Icon buttons keep their label as tooltip-style text via BS_ICON + title.
+    auto makeButton = [&](int id, const wchar_t* text, HICON icon) {
+        DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
+        if (icon)
+            style |= BS_ICON;
+        HWND btn = ::CreateWindowExW(0, WC_BUTTONW, text, style,
             0, 0, 10, 10, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
+        if (icon)
+            ::SendMessageW(btn, BM_SETIMAGE, IMAGE_ICON, reinterpret_cast<LPARAM>(icon));
+        return btn;
     };
-    m_btnConnect = makeButton(IDC_CONNECT, T(StrId::BtnConnect));
-    m_btnRefresh = makeButton(IDC_REFRESH, T(StrId::BtnRefresh));
-    m_btnUpload = makeButton(IDC_UPLOAD, T(StrId::BtnUpload));
-    m_btnProfiles = makeButton(IDC_PROFILESBTN, T(StrId::BtnProfiles));
+    m_btnConnect = makeButton(IDC_CONNECT, T(StrId::BtnConnect), Icons::Connect());
+    m_btnRefresh = makeButton(IDC_REFRESH, T(StrId::BtnRefresh), Icons::Refresh());
+    m_btnUpload = makeButton(IDC_UPLOAD, T(StrId::BtnUpload), Icons::Upload());
+    m_btnProfiles = makeButton(IDC_PROFILESBTN, T(StrId::BtnProfiles), Icons::Settings());
+
+    m_tooltip = ::CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        hwnd, nullptr, inst, nullptr);
 
     m_tree = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP |
             TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
         0, 0, 10, 10, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_TREE)), inst, nullptr);
+    if (HIMAGELIST images = Icons::TreeImageList())
+        TreeView_SetImageList(m_tree, images, TVSIL_NORMAL);
 
     m_transfers = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_NOSORTHEADER,
@@ -251,6 +268,7 @@ void DockPanel::OnCreate(HWND hwnd)
                      m_btnProfiles, m_tree, m_transfers, m_log})
         ::SendMessageW(ctl, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
 
+    UpdateTooltips();
     ReloadProfiles();
 }
 
@@ -301,7 +319,13 @@ void DockPanel::OnCommand(WPARAM wParam)
         plugin.CmdUploadCurrent();
         break;
     case IDC_PROFILESBTN:
+        ShowGearMenu();
+        break;
+    case IDM_GEAR_PROFILES:
         plugin.CmdProfiles();
+        break;
+    case IDM_GEAR_SETTINGS:
+        plugin.CmdSettings();
         break;
     case IDC_PROFILE:
         if (HIWORD(wParam) == CBN_SELCHANGE)
@@ -371,6 +395,13 @@ LRESULT DockPanel::OnNotify(NMHDR* hdr)
     if (!hdr)
         return 0;
 
+    // Docking-manager notifications arrive with hwndFrom == Notepad++.
+    if (hdr->code == DMN_CLOSE)
+    {
+        NppS3Plugin::Instance().OnPanelClosedByUser();
+        return 0;
+    }
+
     if (hdr->hwndFrom == m_tree)
     {
         switch (hdr->code)
@@ -381,8 +412,9 @@ LRESULT DockPanel::OnNotify(NMHDR* hdr)
             if (tv->action == TVE_EXPAND)
             {
                 NodeData* data = DataOf(tv->itemNew.hItem);
-                if (data && !data->loaded && !data->loading &&
-                    data->kind != NodeKind::Object)
+                const bool container = data && (data->kind == NodeKind::Bucket ||
+                                                data->kind == NodeKind::Prefix);
+                if (container && !data->loaded && !data->loading)
                 {
                     NppS3Plugin::Instance().RequestChildren(tv->itemNew.hItem);
                     return TRUE; // block expansion until listing arrives
@@ -449,6 +481,23 @@ void DockPanel::OnTreeContextMenu(int x, int y)
         return;
 
     HMENU menu = ::CreatePopupMenu();
+    if (data->kind == NodeKind::Placeholder)
+    {
+        ::DestroyMenu(menu);
+        return;
+    }
+    if (data->kind == NodeKind::Root)
+    {
+        ::AppendMenuW(menu, MF_STRING, IDC_CONNECT,
+                      m_connected ? T(StrId::CtxDisconnect) : T(StrId::CtxConnect));
+        if (m_connected)
+            ::AppendMenuW(menu, MF_STRING, IDM_CTX_REFRESH, T(StrId::CtxRefresh));
+        ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(menu, MF_STRING, IDC_PROFILESBTN, T(StrId::BtnProfiles));
+        ::TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, m_hwnd, nullptr);
+        ::DestroyMenu(menu);
+        return;
+    }
     if (data->kind == NodeKind::Object)
     {
         ::AppendMenuW(menu, MF_STRING, IDM_CTX_OPEN, T(StrId::CtxOpen));
@@ -494,11 +543,114 @@ void DockPanel::OnTransfersContextMenu(int x, int y)
     ::DestroyMenu(menu);
 }
 
+void DockPanel::ShowGearMenu()
+{
+    // The gear covers two separate destinations now (per-connection profiles
+    // vs. plugin-wide settings), so it drops a menu instead of guessing.
+    RECT rc{};
+    ::GetWindowRect(m_btnProfiles, &rc);
+
+    HMENU menu = ::CreatePopupMenu();
+    ::AppendMenuW(menu, MF_STRING, IDM_GEAR_PROFILES, T(StrId::MenuProfiles));
+    ::AppendMenuW(menu, MF_STRING, IDM_GEAR_SETTINGS, T(StrId::MenuSettings));
+    ::TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_LEFTBUTTON, rc.right, rc.bottom,
+                     0, m_hwnd, nullptr);
+    ::DestroyMenu(menu);
+}
+
+void DockPanel::UpdateTooltips()
+{
+    if (!m_tooltip)
+        return;
+    const struct { HWND ctl; StrId id; } tips[] = {
+        {m_btnConnect, StrId::BtnConnect},
+        {m_btnRefresh, StrId::BtnRefresh},
+        {m_btnUpload, StrId::BtnUpload},
+        {m_btnProfiles, StrId::BtnGear},
+    };
+    for (const auto& tip : tips)
+    {
+        TOOLINFOW info{};
+        info.cbSize = sizeof(info);
+        info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        info.hwnd = m_hwnd;
+        info.uId = reinterpret_cast<UINT_PTR>(tip.ctl);
+        info.lpszText = const_cast<wchar_t*>(T(tip.id));
+        // Adding an already-registered tool is ignored, so add-then-update
+        // covers both first setup and relanguage.
+        ::SendMessageW(m_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
+        ::SendMessageW(m_tooltip, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
+    }
+}
+
 // ------------------------------------------------------------------- tree API
 
 void DockPanel::ClearTree()
 {
     TreeView_DeleteAllItems(m_tree);
+    m_root = nullptr;
+}
+
+void DockPanel::ResetRoot(const std::wstring& label, bool connected)
+{
+    // The root node is the anchor the user always sees, so it is recreated
+    // rather than left absent when there is no profile or no connection.
+    TreeView_DeleteAllItems(m_tree);
+
+    auto* data = new NodeData();
+    data->kind = NodeKind::Root;
+    data->loaded = !connected; // nothing to fetch while disconnected
+
+    TVINSERTSTRUCTW ins{};
+    ins.hParent = TVI_ROOT;
+    ins.hInsertAfter = TVI_LAST;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+    std::wstring text = label;
+    ins.item.pszText = text.data();
+    ins.item.lParam = reinterpret_cast<LPARAM>(data);
+    ins.item.cChildren = connected ? 1 : 0;
+    ins.item.iImage = static_cast<int>(TreeIcon::Root);
+    ins.item.iSelectedImage = static_cast<int>(TreeIcon::Root);
+    m_root = TreeView_InsertItem(m_tree, &ins);
+    TreeView_SelectItem(m_tree, m_root);
+}
+
+void DockPanel::SetPlaceholder(HTREEITEM parent, const wchar_t* text)
+{
+    ClearPlaceholders(parent);
+
+    auto* data = new NodeData();
+    data->kind = NodeKind::Placeholder;
+
+    TVINSERTSTRUCTW ins{};
+    ins.hParent = parent;
+    ins.hInsertAfter = TVI_LAST;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+    std::wstring label = text;
+    ins.item.pszText = label.data();
+    ins.item.lParam = reinterpret_cast<LPARAM>(data);
+    ins.item.cChildren = 0;
+    TreeView_InsertItem(m_tree, &ins);
+
+    TVITEMW tvi{};
+    tvi.mask = TVIF_HANDLE | TVIF_CHILDREN;
+    tvi.hItem = parent;
+    tvi.cChildren = 1;
+    TreeView_SetItem(m_tree, &tvi);
+    TreeView_Expand(m_tree, parent, TVE_EXPAND);
+}
+
+void DockPanel::ClearPlaceholders(HTREEITEM parent)
+{
+    HTREEITEM child = TreeView_GetChild(m_tree, parent);
+    while (child)
+    {
+        HTREEITEM next = TreeView_GetNextSibling(m_tree, child);
+        NodeData* data = DataOf(child);
+        if (data && data->kind == NodeKind::Placeholder)
+            TreeView_DeleteItem(m_tree, child);
+        child = next;
+    }
 }
 
 HTREEITEM DockPanel::AddBucket(const std::string& bucket)
@@ -508,13 +660,16 @@ HTREEITEM DockPanel::AddBucket(const std::string& bucket)
     data->bucket = bucket;
 
     TVINSERTSTRUCTW ins{};
-    ins.hParent = TVI_ROOT;
+    // Buckets hang off the always-present root node.
+    ins.hParent = m_root ? m_root : TVI_ROOT;
     ins.hInsertAfter = TVI_LAST;
-    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
     std::wstring label = Utf8ToWide(bucket);
     ins.item.pszText = label.data();
     ins.item.lParam = reinterpret_cast<LPARAM>(data);
     ins.item.cChildren = 1; // show expander before loading
+    ins.item.iImage = static_cast<int>(TreeIcon::Bucket);
+    ins.item.iSelectedImage = static_cast<int>(TreeIcon::Bucket);
     return TreeView_InsertItem(m_tree, &ins);
 }
 
@@ -547,11 +702,13 @@ void DockPanel::AppendListing(HTREEITEM item, const std::string& parentPrefix,
         TVINSERTSTRUCTW ins{};
         ins.hParent = item;
         ins.hInsertAfter = TVI_LAST;
-        ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+        ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
         std::wstring label = Utf8ToWide(name);
         ins.item.pszText = label.data();
         ins.item.lParam = reinterpret_cast<LPARAM>(data);
         ins.item.cChildren = 1;
+        ins.item.iImage = static_cast<int>(TreeIcon::Folder);
+        ins.item.iSelectedImage = static_cast<int>(TreeIcon::Folder);
         TreeView_InsertItem(m_tree, &ins);
     }
 
@@ -575,11 +732,13 @@ void DockPanel::AppendListing(HTREEITEM item, const std::string& parentPrefix,
         TVINSERTSTRUCTW ins{};
         ins.hParent = item;
         ins.hInsertAfter = TVI_LAST;
-        ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+        ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
         std::wstring label = Utf8ToWide(name);
         ins.item.pszText = label.data();
         ins.item.lParam = reinterpret_cast<LPARAM>(data);
         ins.item.cChildren = 0;
+        ins.item.iImage = static_cast<int>(TreeIcon::File);
+        ins.item.iSelectedImage = static_cast<int>(TreeIcon::File);
         TreeView_InsertItem(m_tree, &ins);
     }
 }
@@ -592,11 +751,19 @@ void DockPanel::FinishNode(HTREEITEM item)
     data->loaded = true;
     data->loading = false;
 
-    // Update the expander to reflect actual children.
+    ClearPlaceholders(item);
+    if (!TreeView_GetChild(m_tree, item))
+    {
+        // Keep the node expandable so an empty prefix still reads as a
+        // container rather than silently looking like a leaf.
+        SetPlaceholder(item, T(StrId::TreeEmpty));
+        return;
+    }
+
     TVITEMW tvi{};
     tvi.mask = TVIF_HANDLE | TVIF_CHILDREN;
     tvi.hItem = item;
-    tvi.cChildren = TreeView_GetChild(m_tree, item) ? 1 : 0;
+    tvi.cChildren = 1;
     TreeView_SetItem(m_tree, &tvi);
     TreeView_Expand(m_tree, item, TVE_EXPAND);
 }
@@ -641,7 +808,9 @@ HTREEITEM DockPanel::ParentOf(HTREEITEM item) const
 
 HTREEITEM DockPanel::FindBucketNode(const std::string& bucket) const
 {
-    for (HTREEITEM it = TreeView_GetRoot(m_tree); it;
+    if (!m_root)
+        return nullptr;
+    for (HTREEITEM it = TreeView_GetChild(m_tree, m_root); it;
          it = TreeView_GetNextSibling(m_tree, it))
     {
         NodeData* data = DataOf(it);
@@ -835,10 +1004,7 @@ void DockPanel::Relocalize()
 {
     if (!m_hwnd)
         return;
-    ::SetWindowTextW(m_btnConnect, T(StrId::BtnConnect));
-    ::SetWindowTextW(m_btnRefresh, T(StrId::BtnRefresh));
-    ::SetWindowTextW(m_btnUpload, T(StrId::BtnUpload));
-    ::SetWindowTextW(m_btnProfiles, T(StrId::BtnProfiles));
+    UpdateTooltips();
 
     const StrId colIds[] = {StrId::ColOperation, StrId::ColObject,
                             StrId::ColProgress, StrId::ColStatus};

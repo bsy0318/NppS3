@@ -25,6 +25,7 @@ enum class StrId
     MenuShowPanel,
     MenuUploadCurrent,
     MenuProfiles,
+    MenuSettings,
     MenuAbout,
 
     // Panel chrome
@@ -33,6 +34,7 @@ enum class StrId
     BtnRefresh,
     BtnUpload,
     BtnProfiles,
+    BtnGear,
 
     // Transfer list columns / states
     ColOperation,
@@ -74,6 +76,15 @@ enum class StrId
     CtxCancel,
     CtxClearFinished,
 
+    // Tree placeholders
+    TreeNoProfile,
+    TreeDisconnected,   // %s = profile name
+    TreeConnecting,
+    TreeEmpty,
+    TreeLoading,
+    CtxConnect,
+    CtxDisconnect,
+
     // Messages
     MsgConnected,
     MsgConnectFailed,
@@ -112,7 +123,6 @@ enum class StrId
     LblDefaultPrefix,
     ChkPathStyle,
     ChkAutoUpload,
-    LblLanguage,
     BtnNew,
     BtnDelete,
     BtnSave,
@@ -124,7 +134,19 @@ enum class StrId
     MsgFieldsRequired,
     MsgSecretRequired,
     MsgConfirmDeleteProfile,  // %s = profile name
-    MsgLangRestartHint,
+
+    // General settings dialog
+    DlgSettingsTitle,
+    LblLanguage,
+    LblStaleCacheDays,
+    LblStaleCacheHint,
+    LblCacheLocation,
+    BtnOpenCacheFolder,
+    BtnClearCacheNow,
+    MsgCacheCleared,          // %d = files removed
+    MsgConfirmClearCache,
+    GrpAppearance,
+    GrpCache,
 
     // Upload dialog
     DlgUploadTitle,

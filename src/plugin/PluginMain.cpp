@@ -17,6 +17,7 @@ npps3::NppS3Plugin& Plugin()
 void CmdShowPanel() { Plugin().CmdShowPanel(); }
 void CmdUploadCurrent() { Plugin().CmdUploadCurrent(); }
 void CmdProfiles() { Plugin().CmdProfiles(); }
+void CmdSettings() { Plugin().CmdSettings(); }
 void CmdAbout() { Plugin().CmdAbout(); }
 
 // Registered at load time in English; relabeled with the localized strings
@@ -25,6 +26,7 @@ FuncItem g_funcItems[] = {
     {L"Show S3 Panel", CmdShowPanel, 0, false, nullptr},
     {L"Upload Current File...", CmdUploadCurrent, 0, false, nullptr},
     {L"Profiles...", CmdProfiles, 0, false, nullptr},
+    {L"Settings...", CmdSettings, 0, false, nullptr},
     {L"About NppS3", CmdAbout, 0, false, nullptr},
 };
 

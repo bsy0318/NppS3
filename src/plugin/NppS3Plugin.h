@@ -29,6 +29,7 @@ public:
     void OnDllAttach(HINSTANCE hModule);
     void SetNppData(const NppData& data) { m_npp = data; }
     void OnReady();
+    void OnToolbarModification();
     void OnShutdown();
     void OnNotification(SCNotification* n);
 
@@ -40,7 +41,13 @@ public:
     void CmdShowPanel();
     void CmdUploadCurrent();
     void CmdProfiles();
+    void CmdSettings();
     void CmdAbout();
+
+    // Settings dialog helpers.
+    const std::wstring& CacheRoot() const { return m_cache.Root(); }
+    // Removes cache files not referenced by an open remote document.
+    int ClearCacheNow();
 
     // Called by PluginMain once cmd ids are assigned.
     void SetShowPanelCmdId(int cmdId) { m_showPanelCmdId = cmdId; }
@@ -51,7 +58,10 @@ public:
 
     // Panel-driven actions (UI thread).
     void ConnectActiveProfile();
+    void Disconnect();
     void RefreshTree();
+    // Rebuilds the root node to match the current profile/connection state.
+    void UpdateTreeRoot();
     void RequestChildren(HTREEITEM item);
     void RefreshNode(HTREEITEM item);
     void OpenObject(HTREEITEM item);

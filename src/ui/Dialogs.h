@@ -13,6 +13,9 @@ namespace npps3 {
 // Modal profile management dialog (list + editor + connection test).
 void ShowProfilesDialog(HWND parent, HINSTANCE hInstance);
 
+// Modal general-settings dialog (UI language, local cache policy).
+void ShowSettingsDialog(HWND parent, HINSTANCE hInstance);
+
 struct UploadDialogResult
 {
     std::string profileId;

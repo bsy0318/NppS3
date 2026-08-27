@@ -49,6 +49,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/PluginMain.cpp")
         src/plugin/PluginMain.cpp
         src/plugin/NppS3Plugin.cpp
         src/ui/I18n.cpp
+        src/ui/Icons.cpp
         src/ui/DockPanel.cpp
         src/ui/Dialogs.cpp
         src/ui/NppS3.rc
@@ -85,3 +86,8 @@ add_executable(npps3_integration
 )
 target_link_libraries(npps3_integration PRIVATE npps3_core)
 target_include_directories(npps3_integration PRIVATE src)
+
+# Helper CLI for host-level GUI verification scripts.
+add_executable(npps3_s3cli tests/hosttest/s3cli.cpp)
+target_link_libraries(npps3_s3cli PRIVATE npps3_core)
+target_include_directories(npps3_s3cli PRIVATE src)

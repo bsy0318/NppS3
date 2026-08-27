@@ -10,6 +10,8 @@
 #include "../util/StringUtil.h"
 
 #include <commctrl.h>
+#include <shellapi.h>
+#include <shlobj.h>
 
 #include <thread>
 #include <vector>
@@ -45,11 +47,6 @@ struct ProfilesState
     std::string editingId; // empty while creating a new profile
 };
 
-const Lang kLangOrder[] = {Lang::Auto, Lang::EN, Lang::KO, Lang::JA, Lang::ZH, Lang::RU};
-const wchar_t* const kLangNames[] = {L"Auto", L"English", L"한국어",
-                                     L"日本語", L"中文",
-                                     L"Русский"};
-
 void LocalizeProfilesDialog(HWND dlg)
 {
     ::SetWindowTextW(dlg, T(StrId::DlgProfilesTitle));
@@ -65,7 +62,6 @@ void LocalizeProfilesDialog(HWND dlg)
     SetDlgText(dlg, IDC_LBL_PREFIX, T(StrId::LblDefaultPrefix));
     SetDlgText(dlg, IDC_CHK_PATHSTYLE, T(StrId::ChkPathStyle));
     SetDlgText(dlg, IDC_CHK_AUTOUPLOAD, T(StrId::ChkAutoUpload));
-    SetDlgText(dlg, IDC_LBL_LANGUAGE, T(StrId::LblLanguage));
     SetDlgText(dlg, IDC_BTN_NEW, T(StrId::BtnNew));
     SetDlgText(dlg, IDC_BTN_DELETE, T(StrId::BtnDelete));
     SetDlgText(dlg, IDC_BTN_SAVE, T(StrId::BtnSave));
@@ -180,16 +176,6 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
         ::SendMessageW(prov, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Cloudflare R2"));
         ::SendMessageW(prov, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Custom S3 Compatible"));
 
-        HWND lang = ::GetDlgItem(dlg, IDC_CB_LANGUAGE);
-        for (const wchar_t* name : kLangNames)
-            ::SendMessageW(lang, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
-        Lang cur = LangFromString(plugin.Profiles().Settings().language);
-        int langSel = 0;
-        for (int i = 0; i < static_cast<int>(std::size(kLangOrder)); ++i)
-            if (kLangOrder[i] == cur)
-                langSel = i;
-        ::SendMessageW(lang, CB_SETCURSEL, langSel, 0);
-
         FillProfileList(dlg, plugin.Profiles().Settings().activeProfileId);
         LoadProfileFields(dlg, st);
         return TRUE;
@@ -274,16 +260,7 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                 plugin.Profiles().AddOrUpdate(p);
                 if (plugin.Profiles().Settings().activeProfileId.empty())
                     plugin.Profiles().Settings().activeProfileId = p.id;
-
-                // Language applies with the save.
-                int langSel = static_cast<int>(
-                    ::SendDlgItemMessageW(dlg, IDC_CB_LANGUAGE, CB_GETCURSEL, 0, 0));
-                if (langSel >= 0 && langSel < static_cast<int>(std::size(kLangOrder)))
-                    plugin.Profiles().Settings().language = LangToString(kLangOrder[langSel]);
-
                 plugin.Profiles().Save();
-                plugin.ApplyLanguageSetting();
-                LocalizeProfilesDialog(dlg);
 
                 st->creatingNew = false;
                 st->editingId = p.id;
@@ -357,6 +334,99 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_DESTROY:
         delete st;
         ::SetWindowLongPtrW(dlg, GWLP_USERDATA, 0);
+        return FALSE;
+    }
+    return FALSE;
+}
+
+// ------------------------------------------------------------- settings dialog
+
+const Lang kLangOrder[] = {Lang::Auto, Lang::EN, Lang::KO, Lang::JA, Lang::ZH, Lang::RU};
+const wchar_t* const kLangNames[] = {L"Auto", L"English", L"한국어",
+                                     L"日本語", L"中文",
+                                     L"Русский"};
+
+void LocalizeSettingsDialog(HWND dlg)
+{
+    ::SetWindowTextW(dlg, T(StrId::DlgSettingsTitle));
+    SetDlgText(dlg, IDC_GRP_APPEARANCE, T(StrId::GrpAppearance));
+    SetDlgText(dlg, IDC_LBL_LANGUAGE, T(StrId::LblLanguage));
+    SetDlgText(dlg, IDC_GRP_CACHE, T(StrId::GrpCache));
+    SetDlgText(dlg, IDC_LBL_STALEDAYS, T(StrId::LblStaleCacheDays));
+    SetDlgText(dlg, IDC_LBL_STALEHINT, T(StrId::LblStaleCacheHint));
+    SetDlgText(dlg, IDC_LBL_CACHELOC, T(StrId::LblCacheLocation));
+    SetDlgText(dlg, IDC_BTN_OPENCACHE, T(StrId::BtnOpenCacheFolder));
+    SetDlgText(dlg, IDC_BTN_CLEARCACHE, T(StrId::BtnClearCacheNow));
+    SetDlgText(dlg, IDOK, T(StrId::BtnSave));
+    SetDlgText(dlg, IDCANCEL, T(StrId::BtnClose));
+}
+
+INT_PTR CALLBACK SettingsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM)
+{
+    auto& plugin = NppS3Plugin::Instance();
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        LocalizeSettingsDialog(dlg);
+
+        HWND lang = ::GetDlgItem(dlg, IDC_CB_LANGUAGE);
+        for (const wchar_t* name : kLangNames)
+            ::SendMessageW(lang, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
+        Lang cur = LangFromString(plugin.Profiles().Settings().language);
+        int sel = 0;
+        for (int i = 0; i < static_cast<int>(std::size(kLangOrder)); ++i)
+            if (kLangOrder[i] == cur)
+                sel = i;
+        ::SendMessageW(lang, CB_SETCURSEL, sel, 0);
+
+        SetDlgText(dlg, IDC_ED_STALEDAYS,
+                   std::to_wstring(plugin.Profiles().Settings().staleCacheDays));
+        SetDlgText(dlg, IDC_ED_CACHELOC, plugin.CacheRoot());
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDC_BTN_OPENCACHE:
+        {
+            std::wstring root = plugin.CacheRoot();
+            ::SHCreateDirectoryExW(nullptr, root.c_str(), nullptr);
+            ::ShellExecuteW(dlg, L"open", root.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
+        case IDC_BTN_CLEARCACHE:
+        {
+            if (::MessageBoxW(dlg, T(StrId::MsgConfirmClearCache), T(StrId::DlgSettingsTitle),
+                              MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+                return TRUE;
+            int removed = plugin.ClearCacheNow();
+            wchar_t msg2[256];
+            ::_snwprintf_s(msg2, _TRUNCATE, T(StrId::MsgCacheCleared), removed);
+            ::MessageBoxW(dlg, msg2, T(StrId::DlgSettingsTitle), MB_OK | MB_ICONINFORMATION);
+            return TRUE;
+        }
+        case IDOK:
+        {
+            int sel = static_cast<int>(
+                ::SendDlgItemMessageW(dlg, IDC_CB_LANGUAGE, CB_GETCURSEL, 0, 0));
+            if (sel >= 0 && sel < static_cast<int>(std::size(kLangOrder)))
+                plugin.Profiles().Settings().language = LangToString(kLangOrder[sel]);
+
+            int days = ::_wtoi(GetDlgText(dlg, IDC_ED_STALEDAYS).c_str());
+            if (days >= 1)
+                plugin.Profiles().Settings().staleCacheDays = days;
+
+            plugin.Profiles().Save();
+            plugin.ApplyLanguageSetting();
+            ::EndDialog(dlg, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL:
+            ::EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        }
         return FALSE;
     }
     return FALSE;
@@ -498,6 +568,11 @@ INT_PTR CALLBACK InputDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
 void ShowProfilesDialog(HWND parent, HINSTANCE hInstance)
 {
     ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_PROFILES), parent, ProfilesDlgProc, 0);
+}
+
+void ShowSettingsDialog(HWND parent, HINSTANCE hInstance)
+{
+    ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_SETTINGS), parent, SettingsDlgProc, 0);
 }
 
 bool ShowUploadDialog(HWND parent, HINSTANCE hInstance,

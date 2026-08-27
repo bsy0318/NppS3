@@ -26,7 +26,11 @@ struct LogLine
     std::wstring text;
 };
 
-enum class NodeKind { Bucket, Prefix, Object };
+// Root is the always-present profile node; it exists even when no profile is
+// configured or the session is disconnected, so the tree is never blank.
+enum class NodeKind { Root, Bucket, Prefix, Object, Placeholder };
+
+// Icon indices live in Icons.h (TreeIcon).
 
 struct NodeData
 {
@@ -55,7 +59,13 @@ public:
 
     // Tree management (UI thread only).
     void ClearTree();
+    // Rebuilds the root node label/state; the root always exists.
+    void ResetRoot(const std::wstring& label, bool connected);
+    HTREEITEM RootItem() const { return m_root; }
     HTREEITEM AddBucket(const std::string& bucket);
+    // Shows a non-selectable "(empty)" / "loading..." child under a node.
+    void SetPlaceholder(HTREEITEM parent, const wchar_t* text);
+    void ClearPlaceholders(HTREEITEM parent);
     void SetNodeLoading(HTREEITEM item, bool loading);
     // Appends one page of listing results under `item`; strips the parent
     // prefix from displayed names.
@@ -95,6 +105,8 @@ private:
     void OnTransfersContextMenu(int x, int y);
     void OnItemActivated(HTREEITEM item);
     int TransferRowById(unsigned long long id) const;
+    void UpdateTooltips();
+    void ShowGearMenu();
 
     HWND m_hwnd = nullptr;
     HWND m_profileCombo = nullptr;
@@ -105,7 +117,9 @@ private:
     HWND m_tree = nullptr;
     HWND m_transfers = nullptr;
     HWND m_log = nullptr;
+    HWND m_tooltip = nullptr;
     HFONT m_font = nullptr;
+    HTREEITEM m_root = nullptr;
     bool m_connected = false;
     std::vector<std::string> m_profileIds; // combo index -> profile id
 };

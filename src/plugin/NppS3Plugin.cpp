@@ -8,6 +8,7 @@
 #include "../npp/dockingResource.h"
 #include "../ui/Dialogs.h"
 #include "../ui/I18n.h"
+#include "../ui/Icons.h"
 #include "../util/Mime.h"
 #include "../util/StringUtil.h"
 
@@ -95,11 +96,25 @@ std::wstring NppS3Plugin::ConfigDir() const
     return dir;
 }
 
+void NppS3Plugin::OnToolbarModification()
+{
+    // First safe point to start GDI+ (never from DllMain: loader lock).
+    Icons::Init(m_hModule);
+    const Icons::ToolbarIcons& tb = Icons::PanelToggle();
+    if (!tb.icon || m_showPanelCmdId == 0)
+        return;
+    toolbarIconsWithDarkMode icons{tb.bitmap, tb.icon, tb.iconDark};
+    ::SendMessageW(m_npp._nppHandle, NPPM_ADDTOOLBARICON_FORDARKMODE,
+                   static_cast<WPARAM>(m_showPanelCmdId),
+                   reinterpret_cast<LPARAM>(&icons));
+}
+
 void NppS3Plugin::OnReady()
 {
     if (m_started)
         return;
 
+    Icons::Init(m_hModule);
     std::wstring configDir = ConfigDir();
     if (configDir.empty())
         return;
@@ -176,6 +191,8 @@ void NppS3Plugin::ApplyLanguageSetting()
     {
         LocalizeMenu();
         m_panel.Relocalize();
+        if (!m_connected)
+            UpdateTreeRoot();
     }
 }
 
@@ -191,7 +208,8 @@ void NppS3Plugin::LocalizeMenu()
         {0, StrId::MenuShowPanel},
         {1, StrId::MenuUploadCurrent},
         {2, StrId::MenuProfiles},
-        {3, StrId::MenuAbout},
+        {3, StrId::MenuSettings},
+        {4, StrId::MenuAbout},
     };
     for (const auto& it : items)
     {
@@ -222,6 +240,7 @@ void NppS3Plugin::OnShutdown()
     ::SecureZeroMemory(m_activeConfig.secretAccessKey.data(),
                        m_activeConfig.secretAccessKey.size());
     m_panel.Destroy();
+    Icons::Shutdown();
 }
 
 void NppS3Plugin::OnNotification(SCNotification* n)
@@ -232,6 +251,9 @@ void NppS3Plugin::OnNotification(SCNotification* n)
     {
     case NPPN_READY:
         OnReady();
+        break;
+    case NPPN_TBMODIFICATION:
+        OnToolbarModification();
         break;
     case NPPN_SHUTDOWN:
         OnShutdown();
@@ -280,6 +302,7 @@ void NppS3Plugin::CmdShowPanel()
                        reinterpret_cast<LPARAM>(&data));
         m_panelRegistered = true;
         m_panel.ReloadProfiles();
+        UpdateTreeRoot();
         ::SendMessageW(m_npp._nppHandle, NPPM_MODELESSDIALOG, MODELESSDIALOGADD,
                        reinterpret_cast<LPARAM>(m_panel.Handle()));
     }
@@ -288,12 +311,15 @@ void NppS3Plugin::CmdShowPanel()
     {
         ::SendMessageW(m_npp._nppHandle, NPPM_DMMHIDE, 0,
                        reinterpret_cast<LPARAM>(m_panel.Handle()));
+        ::ShowWindow(m_panel.Handle(), SW_HIDE);
         m_panelVisible = false;
     }
     else
     {
         ::SendMessageW(m_npp._nppHandle, NPPM_DMMSHOW, 0,
                        reinterpret_cast<LPARAM>(m_panel.Handle()));
+        // The docking manager shows the container but not the client window.
+        ::ShowWindow(m_panel.Handle(), SW_SHOW);
         m_panelVisible = true;
     }
     UpdateShowPanelCheck(m_panelVisible);
@@ -305,6 +331,7 @@ void NppS3Plugin::OnPanelClosedByUser()
     {
         ::SendMessageW(m_npp._nppHandle, NPPM_DMMHIDE, 0,
                        reinterpret_cast<LPARAM>(m_panel.Handle()));
+        ::ShowWindow(m_panel.Handle(), SW_HIDE);
         m_panelVisible = false;
         UpdateShowPanelCheck(false);
     }
@@ -375,6 +402,22 @@ void NppS3Plugin::CmdProfiles()
         return;
     ShowProfilesDialog(m_npp._nppHandle, m_hModule);
     m_panel.ReloadProfiles();
+    if (!m_connected)
+        UpdateTreeRoot();
+}
+
+void NppS3Plugin::CmdSettings()
+{
+    if (!m_started)
+        return;
+    ShowSettingsDialog(m_npp._nppHandle, m_hModule);
+}
+
+int NppS3Plugin::ClearCacheNow()
+{
+    return m_cache.RemoveAll([this](const std::wstring& path) {
+        return m_documents.FindByLocalPath(path) != nullptr;
+    });
 }
 
 void NppS3Plugin::CmdAbout()
@@ -447,11 +490,47 @@ void NppS3Plugin::OnProfileSelectionChanged(const std::string& profileId)
     m_profiles.Save();
     m_connected = false;
     m_panel.SetConnectedUi(false);
-    m_panel.ClearTree();
+    UpdateTreeRoot();
+}
+
+void NppS3Plugin::UpdateTreeRoot()
+{
+    if (!m_panel.IsCreated())
+        return;
+    const Profile* p = ActiveProfile();
+    if (!p)
+    {
+        m_panel.ResetRoot(T(StrId::TreeNoProfile), false);
+        return;
+    }
+    if (!m_connected)
+    {
+        wchar_t label[256];
+        ::_snwprintf_s(label, _TRUNCATE, T(StrId::TreeDisconnected),
+                       Utf8ToWide(p->name).c_str());
+        m_panel.ResetRoot(label, false);
+        return;
+    }
+    m_panel.ResetRoot(Utf8ToWide(p->name), true);
+}
+
+void NppS3Plugin::Disconnect()
+{
+    m_connected = false;
+    m_panel.SetConnectedUi(false);
+    ::SecureZeroMemory(m_activeConfig.secretAccessKey.data(),
+                       m_activeConfig.secretAccessKey.size());
+    m_activeConfig = S3Config{};
+    UpdateTreeRoot();
 }
 
 void NppS3Plugin::ConnectActiveProfile()
 {
+    if (m_connected)
+    {
+        Disconnect();
+        return;
+    }
     const Profile* p = ActiveProfile();
     if (!p)
     {
@@ -468,11 +547,13 @@ void NppS3Plugin::ConnectActiveProfile()
         return;
     }
     m_activeConfig = cfg;
+    m_panel.ResetRoot(T(StrId::TreeConnecting), false);
 
     TransferRequest req;
     req.op = TransferOp::TestConnection;
     req.s3 = cfg;
     req.bucket = p->defaultBucket;
+    req.displayLabel = Utf8ToWide(p->name);
 
     PendingAction action;
     action.kind = ActionKind::ConnectTest;
@@ -502,12 +583,14 @@ void NppS3Plugin::RefreshTree()
     if (!p)
         return;
 
-    m_panel.ClearTree();
+    UpdateTreeRoot();
     if (p->defaultBucket.empty())
     {
+        m_panel.SetPlaceholder(m_panel.RootItem(), T(StrId::TreeLoading));
         TransferRequest req;
         req.op = TransferOp::ListBuckets;
         req.s3 = m_activeConfig;
+        req.displayLabel = Utf8ToWide(p->name);
         PendingAction action;
         action.kind = ActionKind::ListBucketsRoot;
         Enqueue(std::move(req), action);
@@ -545,14 +628,17 @@ void NppS3Plugin::RequestChildren(HTREEITEM item)
     NodeData* data = m_panel.DataOf(item);
     if (!data || data->loading || !m_connected)
         return;
-    std::string prefix = data->kind == NodeKind::Bucket ? std::string() : data->key;
+    if (data->kind != NodeKind::Bucket && data->kind != NodeKind::Prefix)
+        return;
+
+    std::string prefix = data->key;
     if (data->kind == NodeKind::Bucket)
     {
         const Profile* p = ActiveProfile();
-        if (p && !p->defaultPrefix.empty())
-            prefix = p->defaultPrefix;
+        prefix = (p && !p->defaultPrefix.empty()) ? p->defaultPrefix : std::string();
     }
     m_panel.SetNodeLoading(item, true);
+    m_panel.SetPlaceholder(item, T(StrId::TreeLoading));
     StartListing(item, data->bucket, prefix, "", 0);
 }
 
@@ -1017,8 +1103,14 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else if (!cancelled)
         {
             m_connected = false;
+            m_panel.SetConnectedUi(false);
+            UpdateTreeRoot();
             ShowError(ev->error, FormatMsg(T(StrId::MsgConnectFailed),
                                            Utf8ToWide(ev->error.Describe())));
+        }
+        else
+        {
+            UpdateTreeRoot();
         }
         break;
     }
@@ -1026,11 +1118,14 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
     case ActionKind::ListBucketsRoot:
         if (ok && ev->result)
         {
+            m_panel.ClearPlaceholders(m_panel.RootItem());
             for (const BucketInfo& b : ev->result->buckets)
                 m_panel.AddBucket(b.name);
+            m_panel.FinishNode(m_panel.RootItem());
         }
         else if (!cancelled)
         {
+            m_panel.SetPlaceholder(m_panel.RootItem(), T(StrId::TreeEmpty));
             ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
         }
         break;
@@ -1038,6 +1133,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
     case ActionKind::ListNode:
         if (ok && ev->result)
         {
+            m_panel.ClearPlaceholders(action.item);
             m_panel.AppendListing(action.item, action.key, ev->result->listing);
             if (ev->result->listing.isTruncated &&
                 !ev->result->listing.nextContinuationToken.empty() && action.page < 100)
@@ -1053,6 +1149,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else
         {
             m_panel.SetNodeLoading(action.item, false);
+            m_panel.SetPlaceholder(action.item, T(StrId::TreeEmpty));
             if (!cancelled)
                 ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
         }

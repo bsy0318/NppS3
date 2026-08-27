@@ -112,17 +112,26 @@ bool CacheManager::EnsureParentDirs(const std::wstring& filePath)
 int CacheManager::CleanupStale(int days,
                                const std::function<bool(const std::wstring&)>& keepPredicate) const
 {
-    if (m_root.empty() || days <= 0)
+    if (days <= 0)
         return 0;
 
-    ULARGE_INTEGER cutoff{};
-    {
-        FILETIME now{};
-        ::GetSystemTimeAsFileTime(&now);
-        ULARGE_INTEGER n{now.dwLowDateTime, now.dwHighDateTime};
-        n.QuadPart -= static_cast<ULONGLONG>(days) * 24ull * 3600ull * 10'000'000ull;
-        cutoff = n;
-    }
+    FILETIME now{};
+    ::GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER cutoff{now.dwLowDateTime, now.dwHighDateTime};
+    cutoff.QuadPart -= static_cast<ULONGLONG>(days) * 24ull * 3600ull * 10'000'000ull;
+    return Sweep(cutoff.QuadPart, keepPredicate);
+}
+
+int CacheManager::RemoveAll(const std::function<bool(const std::wstring&)>& keepPredicate) const
+{
+    return Sweep(MAXULONGLONG, keepPredicate);
+}
+
+int CacheManager::Sweep(unsigned long long cutoffFileTime,
+                        const std::function<bool(const std::wstring&)>& keepPredicate) const
+{
+    if (m_root.empty())
+        return 0;
 
     int removed = 0;
     std::vector<std::wstring> dirs{m_root};
@@ -146,7 +155,7 @@ int CacheManager::CleanupStale(int days,
                 continue;
             }
             ULARGE_INTEGER wt{fd.ftLastWriteTime.dwLowDateTime, fd.ftLastWriteTime.dwHighDateTime};
-            if (wt.QuadPart < cutoff.QuadPart)
+            if (wt.QuadPart < cutoffFileTime)
             {
                 if (keepPredicate && keepPredicate(path))
                     continue;

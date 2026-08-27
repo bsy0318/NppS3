@@ -98,12 +98,15 @@ int TransferManager::LaneFor(TransferOp op)
 
 std::wstring TransferManager::LabelFor(const TransferRequest& req)
 {
+    if (!req.displayLabel.empty())
+        return req.displayLabel;
+
     std::string label;
     switch (req.op)
     {
     case TransferOp::ListBuckets:
     case TransferOp::TestConnection:
-        label = req.s3.endpoint;
+        label = req.bucket;
         break;
     case TransferOp::List:
         label = req.bucket + "/" + req.prefix;
