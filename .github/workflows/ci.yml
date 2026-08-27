@@ -1,0 +1,113 @@
+# NppS3 — build and test on every push.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: CI
+
+on:
+  push:
+    branches: ["**"] # tag pushes are handled by release.yml
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: x64
+            runnable: true
+          - arch: x86
+            platform: Win32
+            runnable: true
+          - arch: arm64
+            platform: ARM64
+            # An x64 runner cannot execute ARM64 binaries; this job proves the
+            # tree compiles and links, and the artifact is tested on hardware.
+            runnable: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.platform }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Unit tests
+        if: matrix.runnable
+        run: .\build\Release\npps3_tests.exe
+
+      - name: Stage plugin
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage/NppS3 | Out-Null
+          Copy-Item build/Release/NppS3.dll stage/NppS3/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NppS3-${{ matrix.arch }}
+          path: stage/NppS3/NppS3.dll
+          if-no-files-found: error
+
+      - name: Upload test tools
+        if: matrix.runnable
+        uses: actions/upload-artifact@v4
+        with:
+          name: npps3-tools-${{ matrix.arch }}
+          path: |
+            build/Release/npps3_integration.exe
+            build/Release/npps3_s3cli.exe
+          if-no-files-found: error
+
+  integration:
+    name: Integration (MinIO)
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npps3-tools-x64
+          path: tools
+
+      # GitHub's Windows runners only run Windows containers, so the
+      # docker-compose setup used locally is replaced by the MinIO Windows
+      # binary. Same server, same S3 API surface.
+      - name: Start MinIO
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://dl.min.io/server/minio/release/windows-amd64/minio.exe -OutFile minio.exe
+          Invoke-WebRequest -Uri https://dl.min.io/client/mc/release/windows-amd64/mc.exe -OutFile mc.exe
+          New-Item -ItemType Directory -Force -Path minio-data | Out-Null
+          $env:MINIO_ROOT_USER = 'npps3local'
+          $env:MINIO_ROOT_PASSWORD = 'npps3localsecret'
+          Start-Process -FilePath .\minio.exe -ArgumentList 'server','minio-data','--address','127.0.0.1:9000' -PassThru
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              Invoke-WebRequest -UseBasicParsing http://127.0.0.1:9000/minio/health/live -TimeoutSec 2 | Out-Null
+              break
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          .\mc.exe alias set local http://127.0.0.1:9000 npps3local npps3localsecret
+          .\mc.exe mb --ignore-existing local/npps3-test
+
+      - name: Integration tests
+        shell: pwsh
+        env:
+          # Local-only development credentials for the throwaway MinIO above.
+          # Real storage credentials never appear in this repository.
+          NPPS3_TEST_ENDPOINT: http://127.0.0.1:9000
+          NPPS3_TEST_ACCESS_KEY_ID: npps3local
+          NPPS3_TEST_SECRET_ACCESS_KEY: npps3localsecret
+          NPPS3_TEST_BUCKET: npps3-test
+          NPPS3_TEST_REGION: us-east-1
+        run: .\tools\npps3_integration.exe
