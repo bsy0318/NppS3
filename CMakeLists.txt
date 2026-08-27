@@ -17,6 +17,33 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_compile_definitions(UNICODE _UNICODE NOMINMAX)
 add_compile_options(/W4 /utf-8 /EHsc /permissive- /Zc:__cplusplus)
 
+# ------------------------------------------------------------------ platform
+# The plugin must match the Notepad++ process it is loaded into, so the same
+# tree builds for x64, x86 (Win32) and ARM64. NPPS3_ARCH names the build for
+# packaging; it follows the Notepad++ download naming.
+if(CMAKE_GENERATOR_PLATFORM)
+    set(_npps3_platform "${CMAKE_GENERATOR_PLATFORM}")
+else()
+    set(_npps3_platform "${CMAKE_VS_PLATFORM_NAME}")
+endif()
+string(TOLOWER "${_npps3_platform}" _npps3_platform_lower)
+
+if(_npps3_platform_lower STREQUAL "win32" OR _npps3_platform_lower STREQUAL "x86")
+    set(NPPS3_ARCH "x86")
+elseif(_npps3_platform_lower STREQUAL "arm64")
+    set(NPPS3_ARCH "arm64")
+elseif(_npps3_platform_lower STREQUAL "x64")
+    set(NPPS3_ARCH "x64")
+else()
+    # Ninja/NMake builds inherit the architecture of the active MSVC toolchain.
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(NPPS3_ARCH "x86")
+    else()
+        set(NPPS3_ARCH "x64")
+    endif()
+endif()
+message(STATUS "NppS3 target architecture: ${NPPS3_ARCH}")
+
 # ---------------------------------------------------------------- third party
 add_library(tinyxml2 STATIC third_party/tinyxml2/tinyxml2.cpp)
 target_include_directories(tinyxml2 PUBLIC third_party/tinyxml2)

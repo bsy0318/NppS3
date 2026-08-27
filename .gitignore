@@ -3,10 +3,13 @@
 .env.*
 !.env.example
 
-# Build output
+# Build output (one directory per target architecture)
 build/
+build-*/
 out/
 dist/
+pkg/
+stage/
 *.obj
 *.pdb
 *.ilk
