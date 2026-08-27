@@ -416,13 +416,30 @@ int main(int argc, char** argv)
                p.ok && c.ok && verifyNew.ok && del.ok && oldGone);
     }
 
+    // Some servers store objects as files and inherit the host's file-name
+    // rules; MinIO on Windows cannot hold a key containing ':' or '?'. Probe
+    // once so those cases are reported as skipped rather than failed.
+    const bool specialKeysSupported = [&] {
+        const std::string probe = runPrefix + "probe/spec:ial?key.txt";
+        auto p = client.PutObjectBytes(bucket, probe, "probe", "text/plain");
+        if (!p.ok)
+            return false;
+        client.DeleteObject(bucket, probe);
+        return true;
+    }();
+    if (!specialKeysSupported)
+        std::printf("[INFO] Server cannot store keys with ':' or '?'; those cases are skipped\n");
+
     // --- 9. Unicode keys -----------------------------------------------------
     {
-        const std::string uniKeys[] = {
+        std::vector<std::string> uniKeys = {
             runPrefix + "\xed\x95\x9c\xea\xb8\x80/\xed\x85\x8c\xec\x8a\xa4\xed\x8a\xb8.json", // 한글/테스트.json
             runPrefix + "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e/test.txt",                       // 日本語/test.txt
-            runPrefix + "special chars/#test?.txt",
         };
+        if (specialKeysSupported)
+            uniKeys.push_back(runPrefix + "special chars/#test?.txt");
+        else
+            std::printf("[SKIP] Unicode key: special characters\n");
         for (const std::string& key : uniKeys)
         {
             const std::string body = "unicode:" + key;
@@ -792,13 +809,14 @@ int main(int argc, char** argv)
     {
         const std::string folderPrefix = runPrefix + "folder/";
         struct Entry { const char* suffix; const char* body; };
-        const Entry entries[] = {
+        std::vector<Entry> entries = {
             {"root.txt", "root"},
             {"sub/one.txt", "one"},
             {"sub/deeper/two.json", "{\"n\":2}"},
             {"\xed\x95\x9c\xea\xb8\x80/\xed\x85\x8c\xec\x8a\xa4\xed\x8a\xb8.txt", "korean"},
-            {"weird/a:b?c.txt", "sanitized"},
         };
+        if (specialKeysSupported)
+            entries.push_back({"weird/a:b?c.txt", "sanitized"});
         bool uploaded = true;
         for (const Entry& e : entries)
         {
@@ -846,7 +864,7 @@ int main(int argc, char** argv)
         } while (!token.empty());
 
         Report("Folder download writes every object", listedOk && failed == 0 &&
-                   downloaded == static_cast<int>(std::size(entries)));
+                   downloaded == static_cast<int>(entries.size()));
 
         bool contentOk =
             ReadLocalFile(dest + L"\\root.txt") == "root" &&
@@ -857,8 +875,11 @@ int main(int argc, char** argv)
 
         // ':' and '?' cannot appear in a Windows file name; the key still has to
         // land somewhere predictable rather than fail the whole folder.
-        Report("Folder download sanitizes keys Windows cannot represent",
-               ReadLocalFile(dest + L"\\weird\\a_b_c.txt") == "sanitized");
+        if (specialKeysSupported)
+            Report("Folder download sanitizes keys Windows cannot represent",
+                   ReadLocalFile(dest + L"\\weird\\a_b_c.txt") == "sanitized");
+        else
+            std::printf("[SKIP] Folder download: key sanitization\n");
     }
 
     // --- Cleanup -------------------------------------------------------------

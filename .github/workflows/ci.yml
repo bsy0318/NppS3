@@ -83,12 +83,18 @@ jobs:
 
       # GitHub's Windows runners only run Windows containers, so the
       # docker-compose setup used locally is replaced by the MinIO Windows
-      # binary. Same server, same S3 API surface.
+      # binary. Its filesystem backend inherits NTFS naming rules, so keys
+      # holding ':' or '?' cannot be stored; the runner detects that and skips
+      # those cases. The Linux container used locally covers them.
       - name: Start MinIO
         shell: pwsh
+        env:
+          # Pinned so a server-side change cannot alter CI results on its own.
+          MINIO_RELEASE: RELEASE.2025-04-22T22-12-26Z
+          MC_RELEASE: RELEASE.2025-04-16T18-13-26Z
         run: |
-          Invoke-WebRequest -Uri https://dl.min.io/server/minio/release/windows-amd64/minio.exe -OutFile minio.exe
-          Invoke-WebRequest -Uri https://dl.min.io/client/mc/release/windows-amd64/mc.exe -OutFile mc.exe
+          Invoke-WebRequest -Uri "https://dl.min.io/server/minio/release/windows-amd64/archive/minio.$env:MINIO_RELEASE" -OutFile minio.exe
+          Invoke-WebRequest -Uri "https://dl.min.io/client/mc/release/windows-amd64/archive/mc.$env:MC_RELEASE" -OutFile mc.exe
           New-Item -ItemType Directory -Force -Path minio-data | Out-Null
           $env:MINIO_ROOT_USER = 'npps3local'
           $env:MINIO_ROOT_PASSWORD = 'npps3localsecret'
