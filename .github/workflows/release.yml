@@ -43,8 +43,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # No -G: the default generator follows whichever Visual Studio the runner
+      # image ships, so a new image does not break the build.
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.platform }}
+        run: cmake -S . -B build -A ${{ matrix.platform }}
 
       - name: Build
         run: cmake --build build --config Release
