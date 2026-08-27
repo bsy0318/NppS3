@@ -1,29 +1,58 @@
-# NppS3 — build every architecture and publish a GitHub release on a v* tag.
+# NppS3 — publish a GitHub release whenever the version in Version.h is new.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-#   git tag v0.2.0 && git push origin v0.2.0
+# Bump NPPS3_VERSION_STR in src/plugin/Version.h and push to main. Pushes that
+# do not change the version publish nothing.
 #
-# Each architecture ships as its own zip so a user can drop NppS3.dll into the
-# plugins\NppS3 folder of a matching Notepad++ build.
+# The tag is created here rather than pushed separately: a tag pushed with
+# GITHUB_TOKEN does not start another workflow, so a tag-triggered build would
+# never run.
 
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build and release (e.g. v0.2.0)"
-        required: true
 
 permissions:
   contents: write
 
 jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags decide whether this version is already out
+
+      - id: version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^#define NPPS3_VERSION_STR "\(.*\)"$/\1/p' src/plugin/Version.h)
+          if [ -z "$version" ]; then
+            echo "::error::NPPS3_VERSION_STR not found in src/plugin/Version.h"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Keying off the tag rather than a diff keeps re-runs idempotent.
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version is already released; nothing to do."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$version is new; building the release."
+          fi
+
   build:
     name: Build ${{ matrix.arch }}
     runs-on: windows-latest
+    needs: check
+    if: needs.check.outputs.release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -40,8 +69,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
       # No -G: the default generator follows whichever Visual Studio the runner
       # image ships, so a new image does not break the build.
@@ -57,10 +84,10 @@ jobs:
 
       - name: Package
         shell: pwsh
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
-          $version = (Select-String -Path src/plugin/Version.h -Pattern '#define NPPS3_VERSION_STR "([^"]+)"').Matches[0].Groups[1].Value
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $name = "NppS3-$version-${{ matrix.arch }}"
+          $name = "NppS3-$env:VERSION-${{ matrix.arch }}"
           New-Item -ItemType Directory -Force -Path "pkg/$name" | Out-Null
           Copy-Item build/Release/NppS3.dll "pkg/$name/"
           Copy-Item LICENSE* "pkg/$name/" -ErrorAction SilentlyContinue
@@ -80,7 +107,7 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [check, build]
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +120,7 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
           ls -l dist
@@ -110,7 +137,8 @@ jobs:
           The `.sha256` files carry the checksum of each archive.
           EOF
           )
-          gh release create "$TAG" dist/*.zip dist/*.sha256 \
-            --title "NppS3 $TAG" \
-            --notes "$notes" \
-            --verify-tag
+          # gh creates the tag at this commit; no separate tag push is needed.
+          gh release create "v$VERSION" dist/*.zip dist/*.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "NppS3 v$VERSION" \
+            --notes "$notes"
