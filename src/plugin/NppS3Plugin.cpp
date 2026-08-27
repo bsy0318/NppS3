@@ -400,8 +400,19 @@ void NppS3Plugin::CmdProfiles()
 {
     if (!m_started)
         return;
-    ShowProfilesDialog(m_npp._nppHandle, m_hModule);
+    std::string connectId;
+    const bool connectRequested = ShowProfilesDialog(m_npp._nppHandle, m_hModule, &connectId);
     m_panel.ReloadProfiles();
+
+    if (connectRequested && !connectId.empty())
+    {
+        m_panel.SelectProfile(connectId);
+        if (m_connected)
+            Disconnect();
+        m_profiles.Settings().activeProfileId = connectId;
+        ConnectActiveProfile();
+        return;
+    }
     if (!m_connected)
         UpdateTreeRoot();
 }

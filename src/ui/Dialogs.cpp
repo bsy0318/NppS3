@@ -44,7 +44,9 @@ struct ProfilesState
 {
     bool creatingNew = false;
     bool testRunning = false;
-    std::string editingId; // empty while creating a new profile
+    std::string editingId;            // empty while creating a new profile
+    std::string* connectId = nullptr; // set when the user double-clicks to connect
+    bool connectRequested = false;
 };
 
 void LocalizeProfilesDialog(HWND dlg)
@@ -63,6 +65,7 @@ void LocalizeProfilesDialog(HWND dlg)
     SetDlgText(dlg, IDC_CHK_PATHSTYLE, T(StrId::ChkPathStyle));
     SetDlgText(dlg, IDC_CHK_AUTOUPLOAD, T(StrId::ChkAutoUpload));
     SetDlgText(dlg, IDC_BTN_NEW, T(StrId::BtnNew));
+    SetDlgText(dlg, IDC_BTN_DUPLICATE, T(StrId::BtnDuplicate));
     SetDlgText(dlg, IDC_BTN_DELETE, T(StrId::BtnDelete));
     SetDlgText(dlg, IDC_BTN_SAVE, T(StrId::BtnSave));
     SetDlgText(dlg, IDC_BTN_TEST, T(StrId::BtnTest));
@@ -111,7 +114,22 @@ void LoadProfileFields(HWND dlg, ProfilesState* st)
     SetDlgText(dlg, IDC_ED_ENDPOINT, Utf8ToWide(p.endpoint));
     SetDlgText(dlg, IDC_ED_REGION, Utf8ToWide(p.region));
     SetDlgText(dlg, IDC_ED_ACCESSKEY, Utf8ToWide(p.accessKeyId));
-    SetDlgText(dlg, IDC_ED_SECRET, L"");
+
+    // The secret is shown as a normal Windows password field (dots) rather
+    // than left blank, so the user can see it is set and edit it in place.
+    std::string secret;
+    if (!st->editingId.empty())
+    {
+        if (auto stored = mgr.GetSecret(st->editingId))
+            secret = *stored;
+    }
+    std::wstring wideSecret = Utf8ToWide(secret);
+    SetDlgText(dlg, IDC_ED_SECRET, wideSecret);
+    if (!wideSecret.empty())
+        ::SecureZeroMemory(wideSecret.data(), wideSecret.size() * sizeof(wchar_t));
+    if (!secret.empty())
+        ::SecureZeroMemory(secret.data(), secret.size());
+
     SetDlgText(dlg, IDC_ED_BUCKET, Utf8ToWide(p.defaultBucket));
     SetDlgText(dlg, IDC_ED_PREFIX, Utf8ToWide(p.defaultPrefix));
     ::CheckDlgButton(dlg, IDC_CHK_PATHSTYLE, p.pathStyle ? BST_CHECKED : BST_UNCHECKED);
@@ -168,6 +186,7 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_INITDIALOG:
     {
         st = new ProfilesState();
+        st->connectId = reinterpret_cast<std::string*>(lParam);
         ::SetWindowLongPtrW(dlg, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
         LocalizeProfilesDialog(dlg);
 
@@ -190,6 +209,16 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                 st->creatingNew = false;
                 LoadProfileFields(dlg, st);
             }
+            else if (HIWORD(wParam) == LBN_DBLCLK && st && !st->editingId.empty())
+            {
+                // Double-click activates the profile: close and connect.
+                plugin.Profiles().Settings().activeProfileId = st->editingId;
+                plugin.Profiles().Save();
+                if (st->connectId)
+                    *st->connectId = st->editingId;
+                st->connectRequested = true;
+                ::EndDialog(dlg, IDOK);
+            }
             return TRUE;
 
         case IDC_CB_PROVIDER:
@@ -209,6 +238,33 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                 ::CheckDlgButton(dlg, IDC_CHK_PATHSTYLE, BST_CHECKED);
                 ::CheckDlgButton(dlg, IDC_CHK_AUTOUPLOAD, BST_CHECKED);
                 ::SetFocus(::GetDlgItem(dlg, IDC_ED_NAME));
+            }
+            return TRUE;
+
+        case IDC_BTN_DUPLICATE:
+            if (st && !st->editingId.empty())
+            {
+                const Profile* src = plugin.Profiles().FindById(st->editingId);
+                if (!src)
+                    return TRUE;
+                Profile copy = *src;
+                copy.id = ProfileManager::GenerateId();
+                copy.name = src->name + WideToUtf8(T(StrId::ProfileCopySuffix));
+
+                // Carry the credential across so the duplicate is usable at once.
+                if (auto secret = plugin.Profiles().GetSecret(src->id))
+                {
+                    plugin.Profiles().SetSecret(copy.id, *secret);
+                    ::SecureZeroMemory(secret->data(), secret->size());
+                }
+                plugin.Profiles().AddOrUpdate(copy);
+                plugin.Profiles().Save();
+
+                st->creatingNew = false;
+                FillProfileList(dlg, copy.id);
+                LoadProfileFields(dlg, st);
+                ::SetFocus(::GetDlgItem(dlg, IDC_ED_NAME));
+                ::SendDlgItemMessageW(dlg, IDC_ED_NAME, EM_SETSEL, 0, -1);
             }
             return TRUE;
 
@@ -243,18 +299,21 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                                   MB_OK | MB_ICONWARNING);
                     return TRUE;
                 }
-                std::string secret = WideToUtf8(GetDlgText(dlg, IDC_ED_SECRET));
-                const bool isNew = p.id.empty();
-                if (isNew && secret.empty())
+                // The field always shows the stored secret, so an empty field
+                // now means the user cleared it rather than "keep existing".
+                std::wstring wideSecret = GetDlgText(dlg, IDC_ED_SECRET);
+                std::string secret = WideToUtf8(wideSecret);
+                if (!wideSecret.empty())
+                    ::SecureZeroMemory(wideSecret.data(), wideSecret.size() * sizeof(wchar_t));
+                if (secret.empty())
                 {
                     ::MessageBoxW(dlg, T(StrId::MsgSecretRequired), T(StrId::DlgProfilesTitle),
                                   MB_OK | MB_ICONWARNING);
                     return TRUE;
                 }
-                if (isNew)
+                if (p.id.empty())
                     p.id = ProfileManager::GenerateId();
-                if (!secret.empty())
-                    plugin.Profiles().SetSecret(p.id, secret);
+                plugin.Profiles().SetSecret(p.id, secret);
                 ::SecureZeroMemory(secret.data(), secret.size());
 
                 plugin.Profiles().AddOrUpdate(p);
@@ -265,7 +324,6 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                 st->creatingNew = false;
                 st->editingId = p.id;
                 FillProfileList(dlg, p.id);
-                SetDlgText(dlg, IDC_ED_SECRET, L"");
                 ::MessageBoxW(dlg, T(StrId::MsgProfileSaved), T(StrId::DlgProfilesTitle),
                               MB_OK | MB_ICONINFORMATION);
             }
@@ -565,9 +623,16 @@ INT_PTR CALLBACK InputDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
 } // namespace
 
-void ShowProfilesDialog(HWND parent, HINSTANCE hInstance)
+bool ShowProfilesDialog(HWND parent, HINSTANCE hInstance, std::string* connectProfileId)
 {
-    ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_PROFILES), parent, ProfilesDlgProc, 0);
+    std::string id;
+    ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_PROFILES), parent, ProfilesDlgProc,
+                      reinterpret_cast<LPARAM>(&id));
+    if (id.empty())
+        return false;
+    if (connectProfileId)
+        *connectProfileId = id;
+    return true;
 }
 
 void ShowSettingsDialog(HWND parent, HINSTANCE hInstance)

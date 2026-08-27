@@ -32,6 +32,7 @@
 #define IDC_CHK_AUTOUPLOAD  2121
 #define IDC_BTN_NEW         2124
 #define IDC_BTN_DELETE      2125
+#define IDC_BTN_DUPLICATE   2128
 #define IDC_BTN_SAVE        2126
 #define IDC_BTN_TEST        2127
 

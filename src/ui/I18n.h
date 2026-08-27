@@ -124,6 +124,7 @@ enum class StrId
     ChkPathStyle,
     ChkAutoUpload,
     BtnNew,
+    BtnDuplicate,
     BtnDelete,
     BtnSave,
     BtnTest,
@@ -134,6 +135,7 @@ enum class StrId
     MsgFieldsRequired,
     MsgSecretRequired,
     MsgConfirmDeleteProfile,  // %s = profile name
+    ProfileCopySuffix,        // appended to a duplicated profile's name
 
     // General settings dialog
     DlgSettingsTitle,

@@ -7,11 +7,14 @@
 #include <windows.h>
 
 #include <string>
+#include <cstring>
 
 namespace npps3 {
 
 // Modal profile management dialog (list + editor + connection test).
-void ShowProfilesDialog(HWND parent, HINSTANCE hInstance);
+// Returns true when the user double-clicked a profile to connect to it;
+// connectProfileId then holds that profile's id.
+bool ShowProfilesDialog(HWND parent, HINSTANCE hInstance, std::string* connectProfileId);
 
 // Modal general-settings dialog (UI language, local cache policy).
 void ShowSettingsDialog(HWND parent, HINSTANCE hInstance);

@@ -44,6 +44,10 @@ constexpr int IDM_CTX_CANCEL = 3111;
 constexpr int IDM_CTX_CLEAR_FINISHED = 3112;
 constexpr int IDM_GEAR_PROFILES = 3113;
 constexpr int IDM_GEAR_SETTINGS = 3114;
+// Menu commands need ids of their own: reusing a child control's id would
+// re-enter that control's WM_COMMAND handler instead.
+constexpr int IDM_ROOT_CONNECT = 3115;
+constexpr int IDM_ROOT_PROFILES = 3116;
 
 std::wstring FormatBytes(uint64_t bytes)
 {
@@ -322,10 +326,14 @@ void DockPanel::OnCommand(WPARAM wParam)
         ShowGearMenu();
         break;
     case IDM_GEAR_PROFILES:
+    case IDM_ROOT_PROFILES:
         plugin.CmdProfiles();
         break;
     case IDM_GEAR_SETTINGS:
         plugin.CmdSettings();
+        break;
+    case IDM_ROOT_CONNECT:
+        plugin.ConnectActiveProfile();
         break;
     case IDC_PROFILE:
         if (HIWORD(wParam) == CBN_SELCHANGE)
@@ -425,11 +433,31 @@ LRESULT DockPanel::OnNotify(NMHDR* hdr)
         case NM_DBLCLK:
         case NM_RETURN:
         {
+            // NM_DBLCLK fires before the selection moves, so resolve the item
+            // under the cursor rather than trusting the current selection.
             HTREEITEM sel = SelectedItem();
+            if (hdr->code == NM_DBLCLK)
+            {
+                POINT pt{};
+                ::GetCursorPos(&pt);
+                ::ScreenToClient(m_tree, &pt);
+                TVHITTESTINFO hit{};
+                hit.pt = pt;
+                if (HTREEITEM hitItem = TreeView_HitTest(m_tree, &hit))
+                    sel = hitItem;
+            }
+
             NodeData* data = DataOf(sel);
-            if (data && data->kind == NodeKind::Object)
+            if (!data)
+                return FALSE;
+            if (data->kind == NodeKind::Object)
             {
                 OnItemActivated(sel);
+                return TRUE;
+            }
+            if (data->kind == NodeKind::Root && !m_connected)
+            {
+                NppS3Plugin::Instance().ConnectActiveProfile();
                 return TRUE;
             }
             return FALSE;
@@ -488,12 +516,12 @@ void DockPanel::OnTreeContextMenu(int x, int y)
     }
     if (data->kind == NodeKind::Root)
     {
-        ::AppendMenuW(menu, MF_STRING, IDC_CONNECT,
+        ::AppendMenuW(menu, MF_STRING, IDM_ROOT_CONNECT,
                       m_connected ? T(StrId::CtxDisconnect) : T(StrId::CtxConnect));
         if (m_connected)
             ::AppendMenuW(menu, MF_STRING, IDM_CTX_REFRESH, T(StrId::CtxRefresh));
         ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        ::AppendMenuW(menu, MF_STRING, IDC_PROFILESBTN, T(StrId::BtnProfiles));
+        ::AppendMenuW(menu, MF_STRING, IDM_ROOT_PROFILES, T(StrId::MenuProfiles));
         ::TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, m_hwnd, nullptr);
         ::DestroyMenu(menu);
         return;
