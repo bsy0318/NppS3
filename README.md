@@ -399,7 +399,7 @@ tests/
   docker/      MinIO container for local integration tests
 
 .github/
-  workflows/   CI build/test workflows and tagged release packaging
+  workflows/   CI build/test workflows and version-triggered release packaging
 ```
 
 The storage implementation is isolated behind the `IObjectStorage` interface. This allows the transfer and document layers to be tested without a real network connection.

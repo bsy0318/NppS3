@@ -399,7 +399,7 @@ tests/
   docker/      로컬 통합 테스트용 MinIO 컨테이너
 
 .github/
-  workflows/   CI 빌드·테스트, 태그 릴리스 패키징
+  workflows/   CI 빌드·테스트, 버전 변경 시 릴리스 패키징
 ```
 
 스토리지 구현은 `IObjectStorage` 인터페이스 뒤로 분리되어 있습니다. 전송 계층과 문서 계층은 실제 네트워크 연결 없이도 테스트할 수 있습니다.
