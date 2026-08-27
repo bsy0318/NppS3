@@ -1,0 +1,111 @@
+// NppS3 — Notepad++ plugin for S3-compatible object storage
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <winres.h>
+#include "resource.h"
+#include "../plugin/Version.h"
+
+// Control captions are set at runtime from the I18n tables; the template
+// text below is only the English fallback shown before localization runs.
+
+IDD_PROFILES DIALOGEX 0, 0, 420, 262
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "NppS3 Profiles"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Profiles", IDC_LBL_LIST, 8, 6, 120, 10
+    LISTBOX         IDC_PROFILE_LIST, 8, 18, 120, 196, LBS_NOTIFY | WS_VSCROLL | WS_BORDER | WS_TABSTOP
+    PUSHBUTTON      "New", IDC_BTN_NEW, 8, 220, 58, 14
+    PUSHBUTTON      "Delete", IDC_BTN_DELETE, 70, 220, 58, 14
+
+    LTEXT           "Profile Name", IDC_LBL_NAME, 140, 8, 130, 10
+    EDITTEXT        IDC_ED_NAME, 140, 19, 130, 13, ES_AUTOHSCROLL
+    LTEXT           "Provider", IDC_LBL_PROVIDER, 280, 8, 132, 10
+    COMBOBOX        IDC_CB_PROVIDER, 280, 19, 132, 60, CBS_DROPDOWNLIST | WS_TABSTOP
+
+    LTEXT           "Endpoint", IDC_LBL_ENDPOINT, 140, 38, 272, 10
+    EDITTEXT        IDC_ED_ENDPOINT, 140, 49, 272, 13, ES_AUTOHSCROLL
+
+    LTEXT           "Region", IDC_LBL_REGION, 140, 68, 130, 10
+    EDITTEXT        IDC_ED_REGION, 140, 79, 130, 13, ES_AUTOHSCROLL
+    LTEXT           "Access Key ID", IDC_LBL_ACCESSKEY, 280, 68, 132, 10
+    EDITTEXT        IDC_ED_ACCESSKEY, 280, 79, 132, 13, ES_AUTOHSCROLL
+
+    LTEXT           "Secret Access Key", IDC_LBL_SECRET, 140, 98, 272, 10
+    EDITTEXT        IDC_ED_SECRET, 140, 109, 272, 13, ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "(leave empty to keep the stored secret)", IDC_LBL_SECRETHINT, 140, 124, 272, 10
+
+    LTEXT           "Default Bucket", IDC_LBL_BUCKET, 140, 138, 130, 10
+    EDITTEXT        IDC_ED_BUCKET, 140, 149, 130, 13, ES_AUTOHSCROLL
+    LTEXT           "Default Prefix", IDC_LBL_PREFIX, 280, 138, 132, 10
+    EDITTEXT        IDC_ED_PREFIX, 280, 149, 132, 13, ES_AUTOHSCROLL
+
+    CONTROL         "Path-style addressing", IDC_CHK_PATHSTYLE, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 140, 168, 130, 10
+    CONTROL         "Auto Upload On Save", IDC_CHK_AUTOUPLOAD, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 280, 168, 132, 10
+
+    LTEXT           "UI Language", IDC_LBL_LANGUAGE, 140, 184, 130, 10
+    COMBOBOX        IDC_CB_LANGUAGE, 140, 195, 130, 90, CBS_DROPDOWNLIST | WS_TABSTOP
+
+    PUSHBUTTON      "Test Connection", IDC_BTN_TEST, 280, 194, 132, 14
+    PUSHBUTTON      "Save", IDC_BTN_SAVE, 254, 240, 74, 14
+    DEFPUSHBUTTON   "Close", IDCANCEL, 336, 240, 76, 14
+END
+
+IDD_UPLOAD DIALOGEX 0, 0, 300, 132
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Upload Current File"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Profile", IDC_LBL_UPPROFILE, 8, 8, 284, 10
+    COMBOBOX        IDC_CB_UPPROFILE, 8, 19, 284, 70, CBS_DROPDOWNLIST | WS_TABSTOP
+    LTEXT           "Bucket", IDC_LBL_UPBUCKET, 8, 38, 284, 10
+    EDITTEXT        IDC_ED_UPBUCKET, 8, 49, 284, 13, ES_AUTOHSCROLL
+    LTEXT           "Object Key", IDC_LBL_UPKEY, 8, 68, 284, 10
+    EDITTEXT        IDC_ED_UPKEY, 8, 79, 284, 13, ES_AUTOHSCROLL
+    LTEXT           "Content-Type", IDC_LBL_UPCTYPE, 8, 92, 284, 10
+    EDITTEXT        IDC_ED_UPCTYPE, 8, 103, 284, 13, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK", IDOK, 154, 112, 66, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 226, 112, 66, 14
+END
+
+IDD_INPUT DIALOGEX 0, 0, 260, 66
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Name", IDC_LBL_INPUT, 8, 8, 244, 10
+    EDITTEXT        IDC_ED_INPUT, 8, 20, 244, 13, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK", IDOK, 114, 44, 66, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 186, 44, 66, 14
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION NPPS3_VERSION_MAJOR, NPPS3_VERSION_MINOR, NPPS3_VERSION_PATCH, NPPS3_VERSION_BUILD
+PRODUCTVERSION NPPS3_VERSION_MAJOR, NPPS3_VERSION_MINOR, NPPS3_VERSION_PATCH, NPPS3_VERSION_BUILD
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "NppS3 contributors"
+            VALUE "FileDescription", "Amazon S3 / Cloudflare R2 client plugin for Notepad++"
+            VALUE "FileVersion", NPPS3_VERSION_STR
+            VALUE "InternalName", "NppS3"
+            VALUE "LegalCopyright", "GPL-3.0-or-later"
+            VALUE "OriginalFilename", "NppS3.dll"
+            VALUE "ProductName", "NppS3"
+            VALUE "ProductVersion", NPPS3_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
