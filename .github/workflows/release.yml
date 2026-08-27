@@ -18,6 +18,13 @@ on:
 permissions:
   contents: write
 
+# The tag only exists once the release is published, so a second push while a
+# release is still building would not see it and would build the same version
+# twice. Queue runs instead of cancelling: cancelling could drop a real release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   check:
     name: Check version
