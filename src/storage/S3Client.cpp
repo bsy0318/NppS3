@@ -298,6 +298,7 @@ Outcome<std::vector<BucketInfo>> S3Client::ListBuckets()
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
+        e.detail = ErrorDetail::MalformedResponse;
         e.message = "Malformed ListBuckets response";
         return Outcome<std::vector<BucketInfo>>::Failure(e);
     }
@@ -333,6 +334,7 @@ Outcome<ListObjectsResult> S3Client::ListObjects(const std::string& bucket,
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
+        e.detail = ErrorDetail::MalformedResponse;
         e.message = "Malformed ListObjectsV2 response";
         return Outcome<ListObjectsResult>::Failure(e);
     }
@@ -388,6 +390,7 @@ Outcome<ObjectMetadata> S3Client::DownloadObject(const std::string& bucket,
         ::DeleteFileW(tmpPath.c_str());
         StorageError e;
         e.kind = ErrorKind::Network;
+        e.detail = ErrorDetail::IncompleteDownload;
         e.message = "Incomplete download (received " + std::to_string(resp.bodyBytes) +
                     " of " + std::to_string(md.size) + " bytes)";
         return Outcome<ObjectMetadata>::Failure(e);
@@ -400,6 +403,7 @@ Outcome<ObjectMetadata> S3Client::DownloadObject(const std::string& bucket,
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = err;
+        e.detail = ErrorDetail::LocalMoveFailed;
         e.message = "Could not move downloaded file into place";
         return Outcome<ObjectMetadata>::Failure(e);
     }
@@ -425,6 +429,7 @@ Outcome<PutObjectResult> S3Client::PutObject(const std::string& bucket,
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = ::GetLastError();
+        e.detail = ErrorDetail::LocalOpenFailed;
         e.message = "Cannot read local file for upload";
         return Outcome<PutObjectResult>::Failure(e);
     }
@@ -455,6 +460,7 @@ Outcome<PutObjectResult> S3Client::PutObjectSingle(const std::string& bucket,
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = ::GetLastError();
+        e.detail = ErrorDetail::LocalOpenFailed;
         e.message = "Cannot read local file for upload";
         return Outcome<PutObjectResult>::Failure(e);
     }
@@ -593,6 +599,7 @@ Outcome<std::string> S3Client::CreateMultipartUpload(const std::string& bucket,
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
+        e.detail = ErrorDetail::MalformedResponse;
         e.message = "Malformed InitiateMultipartUpload response";
         return Outcome<std::string>::Failure(e);
     }
@@ -610,6 +617,7 @@ Outcome<MultipartPart> S3Client::UploadPart(const std::string& bucket, const std
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = ::GetLastError();
+        e.detail = ErrorDetail::LocalRangeMissing;
         e.message = "Cannot read local file range for upload";
         return Outcome<MultipartPart>::Failure(e);
     }
@@ -642,6 +650,7 @@ Outcome<MultipartPart> S3Client::UploadPart(const std::string& bucket, const std
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
+        e.detail = ErrorDetail::MissingPartEtag;
         e.message = "UploadPart response carried no ETag";
         return Outcome<MultipartPart>::Failure(e);
     }
@@ -729,6 +738,7 @@ Outcome<std::vector<MultipartPart>> S3Client::ListParts(const std::string& bucke
         {
             StorageError e;
             e.kind = ErrorKind::Internal;
+            e.detail = ErrorDetail::MalformedResponse;
             e.message = "Malformed ListParts response";
             return Outcome<std::vector<MultipartPart>>::Failure(e);
         }
@@ -770,6 +780,7 @@ Outcome<std::vector<MultipartUploadInfo>> S3Client::ListMultipartUploads(
         {
             StorageError e;
             e.kind = ErrorKind::Internal;
+            e.detail = ErrorDetail::MalformedResponse;
             e.message = "Malformed ListMultipartUploads response";
             return Outcome<std::vector<MultipartUploadInfo>>::Failure(e);
         }

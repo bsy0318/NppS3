@@ -110,21 +110,22 @@ TEST_CASE("Error classification and retry policy")
     CHECK(ClassifyS3Error(429, "") == ErrorKind::Throttled);
     CHECK(ClassifyS3Error(503, "SlowDown") == ErrorKind::Throttled);
 
-    StorageError throttled{ErrorKind::Throttled, 429, "", "", 0};
+    StorageError throttled{.kind = ErrorKind::Throttled, .httpStatus = 429};
     CHECK(throttled.Retryable());
-    StorageError denied{ErrorKind::AccessDenied, 403, "AccessDenied", "", 0};
+    StorageError denied{.kind = ErrorKind::AccessDenied, .httpStatus = 403, .s3Code = "AccessDenied"};
     CHECK_FALSE(denied.Retryable());
-    StorageError server{ErrorKind::Http, 500, "", "", 0};
+    StorageError server{.kind = ErrorKind::Http, .httpStatus = 500};
     CHECK(server.Retryable());
-    StorageError network{ErrorKind::Network, 0, "", "", 0};
+    StorageError network{.kind = ErrorKind::Network};
     CHECK(network.Retryable());
-    StorageError cancelled{ErrorKind::Cancelled, 0, "", "", 0};
+    StorageError cancelled{.kind = ErrorKind::Cancelled};
     CHECK_FALSE(cancelled.Retryable());
 }
 
 TEST_CASE("StorageError.Describe is safe and informative")
 {
-    StorageError e{ErrorKind::NoSuchKey, 404, "NoSuchKey", "The specified key does not exist.", 0};
+    StorageError e{.kind = ErrorKind::NoSuchKey, .httpStatus = 404, .s3Code = "NoSuchKey",
+                   .message = "The specified key does not exist."};
     std::string d = e.Describe();
     CHECK(d.find("NoSuchKey") != std::string::npos);
     CHECK(d.find("404") != std::string::npos);

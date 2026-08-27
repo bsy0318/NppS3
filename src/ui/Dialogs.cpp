@@ -3,6 +3,7 @@
 
 #include "Dialogs.h"
 
+#include "ErrorText.h"
 #include "I18n.h"
 #include "resource.h"
 #include "../plugin/NppS3Plugin.h"
@@ -349,7 +350,7 @@ INT_PTR CALLBACK ProfilesDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPara
                     VoidResult r = NppS3Plugin::Instance().TestProfileConnection(p, secret);
                     ::SecureZeroMemory(secret.data(), secret.size());
                     auto* detail = new std::wstring(
-                        r.ok ? L"" : Utf8ToWide(r.error.Describe()));
+                        r.ok ? L"" : DescribeErrorLocalized(r.error));
                     ::PostMessageW(dlg, WM_TESTRESULT, r.ok ? 1 : 0,
                                    reinterpret_cast<LPARAM>(detail));
                 }).detach();

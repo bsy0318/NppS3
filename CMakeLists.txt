@@ -78,6 +78,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/plugin/PluginMain.cpp")
         src/plugin/PluginMain.cpp
         src/plugin/NppS3Plugin.cpp
         src/ui/I18n.cpp
+        src/ui/ErrorText.cpp
         src/ui/Icons.cpp
         src/ui/DockPanel.cpp
         src/ui/Dialogs.cpp
@@ -104,6 +105,9 @@ add_executable(npps3_tests
     tests/unit/test_cache.cpp
     tests/unit/test_documents.cpp
     tests/unit/test_multipart.cpp
+    tests/unit/test_errortext.cpp
+    src/ui/I18n.cpp
+    src/ui/ErrorText.cpp
 )
 target_link_libraries(npps3_tests PRIVATE npps3_core)
 target_include_directories(npps3_tests PRIVATE third_party/doctest src)

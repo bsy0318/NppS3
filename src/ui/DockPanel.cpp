@@ -78,6 +78,45 @@ const wchar_t* LocalizedState(TransferState st)
     return L"?";
 }
 
+// EDIT controls only break on CRLF; a lone \n from a service message would
+// draw as a control glyph. Continuation lines are indented under the stamp.
+std::wstring NormalizeLogText(const std::wstring& text)
+{
+    std::wstring out;
+    out.reserve(text.size() + 8);
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        const wchar_t c = text[i];
+        if (c == L'\r' || c == L'\n')
+        {
+            if (c == L'\r' && i + 1 < text.size() && text[i + 1] == L'\n')
+                ++i;
+            out += L"\r\n    ";
+        }
+        else if (c == L'\t')
+        {
+            out += L"    ";
+        }
+        else
+        {
+            out.push_back(c);
+        }
+    }
+    while (!out.empty() && (out.back() == L' ' || out.back() == L'\r' || out.back() == L'\n'))
+        out.pop_back();
+    return out;
+}
+
+// ListView cells are single-line; fold any break into a space.
+std::wstring SingleLine(const std::wstring& text)
+{
+    std::wstring out = text;
+    for (wchar_t& c : out)
+        if (c == L'\r' || c == L'\n' || c == L'\t')
+            c = L' ';
+    return out;
+}
+
 const wchar_t* LocalizedOp(TransferOp op)
 {
     switch (op)
@@ -918,7 +957,8 @@ void DockPanel::UpsertTransfer(const TransferEvent& ev)
         row = ListView_InsertItem(m_transfers, &item);
         if (row < 0)
             return;
-        ListView_SetItemText(m_transfers, row, 1, const_cast<wchar_t*>(ev.label.c_str()));
+        std::wstring label = SingleLine(ev.label);
+        ListView_SetItemText(m_transfers, row, 1, label.data());
     }
 
     std::wstring progress;
@@ -976,7 +1016,7 @@ void DockPanel::AppendLog(LogLevel level, const std::wstring& text)
     std::wstring line = prefix;
     if (level == LogLevel::Error)
         line += L"[!] ";
-    line += text;
+    line += NormalizeLogText(text);
     line += L"\r\n";
 
     int len = ::GetWindowTextLengthW(m_log);

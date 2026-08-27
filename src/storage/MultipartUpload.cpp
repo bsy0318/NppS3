@@ -10,10 +10,11 @@ namespace {
 
 constexpr uint64_t kMiB = 1024ull * 1024;
 
-StorageError InternalError(std::string message)
+StorageError InternalError(ErrorDetail detail, std::string message)
 {
     StorageError e;
     e.kind = ErrorKind::Internal;
+    e.detail = detail;
     e.message = std::move(message);
     return e;
 }
@@ -26,8 +27,8 @@ Outcome<MultipartPlan> PlanMultipartUpload(uint64_t fileSize, uint64_t desiredPa
     if (maxParts <= 0)
         maxParts = kMaxParts;
     if (fileSize == 0)
-        return Outcome<MultipartPlan>::Failure(
-            InternalError("Multipart upload requires a non-empty object"));
+        return Outcome<MultipartPlan>::Failure(InternalError(
+            ErrorDetail::MultipartEmptyObject, "Multipart upload requires a non-empty object"));
 
     uint64_t part = std::max<uint64_t>(desiredPartSize, kMinPartSize);
 
@@ -40,9 +41,10 @@ Outcome<MultipartPlan> PlanMultipartUpload(uint64_t fileSize, uint64_t desiredPa
     if (part > kMaxPartSize)
     {
         const uint64_t limitGiB = static_cast<uint64_t>(maxParts) * (kMaxPartSize / (1024 * kMiB));
-        return Outcome<MultipartPlan>::Failure(InternalError(
-            "Object is too large for multipart upload (limit " +
-            std::to_string(limitGiB) + " GiB)"));
+        return Outcome<MultipartPlan>::Failure(
+            InternalError(ErrorDetail::MultipartObjectTooLarge,
+                          "Object is too large for multipart upload (limit " +
+                              std::to_string(limitGiB) + " GiB)"));
     }
 
     MultipartPlan plan;

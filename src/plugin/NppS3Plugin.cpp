@@ -7,6 +7,7 @@
 #include "../npp/Docking.h"
 #include "../npp/dockingResource.h"
 #include "../ui/Dialogs.h"
+#include "../ui/ErrorText.h"
 #include "../ui/I18n.h"
 #include "../ui/Icons.h"
 #include "../util/Mime.h"
@@ -390,11 +391,11 @@ void NppS3Plugin::CmdUploadCurrent()
     const Profile* p = m_profiles.FindById(res.profileId);
     if (!p)
         return;
-    std::string error;
+    StorageError error;
     S3Config cfg = BuildConfig(*p, &error);
-    if (!error.empty())
+    if (error.kind != ErrorKind::None)
     {
-        ::MessageBoxW(m_npp._nppHandle, Utf8ToWide(error).c_str(), T(StrId::MsgErrorTitle),
+        ::MessageBoxW(m_npp._nppHandle, DescribeErrorLocalized(error).c_str(), T(StrId::MsgErrorTitle),
                       MB_OK | MB_ICONERROR);
         return;
     }
@@ -464,7 +465,7 @@ const Profile* NppS3Plugin::ActiveProfile() const
     return m_profiles.FindById(m_profiles.Settings().activeProfileId);
 }
 
-S3Config NppS3Plugin::BuildConfig(const Profile& p, std::string* error) const
+S3Config NppS3Plugin::BuildConfig(const Profile& p, StorageError* error) const
 {
     S3Config cfg;
     cfg.endpoint = p.endpoint;
@@ -475,7 +476,11 @@ S3Config NppS3Plugin::BuildConfig(const Profile& p, std::string* error) const
     if (!secret)
     {
         if (error)
-            *error = "No stored credential for this profile. Re-enter the Secret Access Key in Profiles.";
+        {
+            error->kind = ErrorKind::InvalidCredentials;
+            error->detail = ErrorDetail::NoStoredCredential;
+            error->message = "No stored credential for this profile";
+        }
         return cfg;
     }
     cfg.secretAccessKey = *secret;
@@ -500,6 +505,7 @@ VoidResult NppS3Plugin::TestProfileConnection(const Profile& p, const std::strin
         {
             StorageError e;
             e.kind = ErrorKind::InvalidCredentials;
+            e.detail = ErrorDetail::NoStoredCredential;
             e.message = "No stored credential for this profile";
             return VoidResult::Failure(e);
         }
@@ -568,11 +574,11 @@ void NppS3Plugin::ConnectActiveProfile()
                       MB_OK | MB_ICONINFORMATION);
         return;
     }
-    std::string error;
+    StorageError error;
     S3Config cfg = BuildConfig(*p, &error);
-    if (!error.empty())
+    if (error.kind != ErrorKind::None)
     {
-        ::MessageBoxW(m_npp._nppHandle, Utf8ToWide(error).c_str(), T(StrId::MsgErrorTitle),
+        ::MessageBoxW(m_npp._nppHandle, DescribeErrorLocalized(error).c_str(), T(StrId::MsgErrorTitle),
                       MB_OK | MB_ICONERROR);
         return;
     }
@@ -1154,11 +1160,11 @@ void NppS3Plugin::StartSaveUpload(const std::wstring& localPath)
         FinishSave(localPath, false);
         return;
     }
-    std::string error;
+    StorageError error;
     S3Config cfg = BuildConfig(*p, &error);
-    if (!error.empty())
+    if (error.kind != ErrorKind::None)
     {
-        Log::Instance().Error(Utf8ToWide(error));
+        Log::Instance().Error(DescribeErrorLocalized(error));
         FinishSave(localPath, false);
         return;
     }
@@ -1247,7 +1253,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             m_panel.SetConnectedUi(false);
             UpdateTreeRoot();
             ShowError(ev->error, FormatMsg(T(StrId::MsgConnectFailed),
-                                           Utf8ToWide(ev->error.Describe())));
+                                           DescribeErrorLocalized(ev->error)));
         }
         else
         {
@@ -1267,7 +1273,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else if (!cancelled)
         {
             m_panel.SetPlaceholder(m_panel.RootItem(), T(StrId::TreeEmpty));
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1292,7 +1298,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             m_panel.SetNodeLoading(action.item, false);
             m_panel.SetPlaceholder(action.item, T(StrId::TreeEmpty));
             if (!cancelled)
-                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+                ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1317,7 +1323,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1325,7 +1331,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         if (ok)
             Log::Instance().Info(FormatMsg(T(StrId::MsgDownloadDone), Utf8ToWide(action.key)));
         else if (!cancelled)
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         break;
 
     case ActionKind::HeadForSave:
@@ -1358,7 +1364,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
                     // Rebuild config from the document's profile to be safe.
                     if (const Profile* p = m_profiles.FindById(doc->profileId))
                     {
-                        std::string error;
+                        StorageError error;
                         req.s3 = BuildConfig(*p, &error);
                     }
                     req.bucket = doc->bucket;
@@ -1389,18 +1395,18 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!ok)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
 
         if (proceed)
         {
             const Profile* p = m_profiles.FindById(doc->profileId);
-            std::string error;
+            StorageError error;
             S3Config cfg = p ? BuildConfig(*p, &error) : S3Config{};
-            if (!p || !error.empty())
+            if (!p || error.kind != ErrorKind::None)
             {
-                if (!error.empty())
-                    Log::Instance().Error(Utf8ToWide(error));
+                if (error.kind != ErrorKind::None)
+                    Log::Instance().Error(DescribeErrorLocalized(error));
                 FinishSave(action.localPath, false);
                 break;
             }
@@ -1437,7 +1443,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else
         {
             if (!cancelled)
-                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+                ShowError(ev->error, DescribeErrorLocalized(ev->error));
             LogUploadResumeHint(action.bucket, action.key, false);
         }
         FinishSave(action.localPath, true);
@@ -1460,7 +1466,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1473,7 +1479,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else
         {
             if (!cancelled)
-                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+                ShowError(ev->error, DescribeErrorLocalized(ev->error));
             LogUploadResumeHint(action.bucket, action.key, false);
         }
         break;
@@ -1486,7 +1492,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1509,7 +1515,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1521,7 +1527,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1533,7 +1539,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
@@ -1575,14 +1581,14 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 
     case ActionKind::DeletePrefixItem:
         // Individual deletions log only on failure to avoid log spam.
         if (!ok && !cancelled)
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         break;
 
     case ActionKind::DownloadPrefixPage:
@@ -1653,7 +1659,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         {
             action.bulk->listing = false;
             if (!cancelled)
-                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+                ShowError(ev->error, DescribeErrorLocalized(ev->error));
             FinishBulkIfDone(action);
         }
         break;
@@ -1667,7 +1673,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         {
             ++action.bulk->failed;
             if (!cancelled)
-                Log::Instance().Error(Utf8ToWide(action.key + ": " + ev->error.Describe()));
+                Log::Instance().Error(Utf8ToWide(action.key) + L": " + DescribeErrorLocalized(ev->error));
         }
         --action.bulk->pending;
         FinishBulkIfDone(action);
@@ -1704,7 +1710,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         {
             // Not every provider allows a prefix-wide query; the journal-driven
             // aborts already enqueued still run.
-            Log::Instance().Warn(Utf8ToWide(ev->error.Describe()));
+            Log::Instance().Warn(DescribeErrorLocalized(ev->error));
         }
         action.bulk->listing = false;
         FinishBulkIfDone(action);
@@ -1723,7 +1729,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         else if (!cancelled)
         {
             ++action.bulk->failed;
-            Log::Instance().Error(Utf8ToWide(action.key + ": " + ev->error.Describe()));
+            Log::Instance().Error(Utf8ToWide(action.key) + L": " + DescribeErrorLocalized(ev->error));
         }
         --action.bulk->pending;
         FinishBulkIfDone(action);
@@ -1753,7 +1759,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
         }
         else if (!cancelled)
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            ShowError(ev->error, DescribeErrorLocalized(ev->error));
         }
         break;
 

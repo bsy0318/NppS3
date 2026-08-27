@@ -156,7 +156,7 @@ private:
 
     NppS3Plugin() = default;
 
-    S3Config BuildConfig(const Profile& p, std::string* error) const;
+    S3Config BuildConfig(const Profile& p, StorageError* error) const;
     unsigned long long Enqueue(TransferRequest req, PendingAction action);
     void StartListing(HTREEITEM item, const std::string& bucket,
                       const std::string& prefix, const std::string& token, int page);

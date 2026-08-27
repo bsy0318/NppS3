@@ -32,13 +32,25 @@ StorageError NetworkError(const char* stage, DWORD err)
     e.win32 = err;
     e.message = std::string("Network error during ") + stage + " (code " + std::to_string(err) + ")";
     if (err == ERROR_WINHTTP_TIMEOUT)
+    {
+        e.detail = ErrorDetail::Timeout;
         e.message = std::string("Timeout during ") + stage;
+    }
     else if (err == ERROR_WINHTTP_NAME_NOT_RESOLVED)
+    {
+        e.detail = ErrorDetail::DnsFailed;
         e.message = "DNS name could not be resolved";
+    }
     else if (err == ERROR_WINHTTP_CANNOT_CONNECT)
+    {
+        e.detail = ErrorDetail::ConnectFailed;
         e.message = "Connection could not be established";
+    }
     else if (err == ERROR_WINHTTP_SECURE_FAILURE)
+    {
+        e.detail = ErrorDetail::TlsFailed;
         e.message = "TLS certificate/security failure";
+    }
     return e;
 }
 
@@ -192,6 +204,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
             StorageError e;
             e.kind = ErrorKind::LocalIo;
             e.win32 = ::GetLastError();
+            e.detail = ErrorDetail::LocalOpenFailed;
             e.message = "Cannot open local file for upload";
             return VoidResult::Failure(e);
         }
@@ -200,6 +213,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
         {
             StorageError e;
             e.kind = ErrorKind::LocalIo;
+            e.detail = ErrorDetail::LocalRangeMissing;
             e.message = "Local file is shorter than the requested upload range";
             return VoidResult::Failure(e);
         }
@@ -211,6 +225,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
             StorageError e;
             e.kind = ErrorKind::LocalIo;
             e.win32 = ::GetLastError();
+            e.detail = ErrorDetail::LocalRangeMissing;
             e.message = "Cannot seek to the requested upload range";
             return VoidResult::Failure(e);
         }
@@ -227,6 +242,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
     {
         StorageError e;
         e.kind = ErrorKind::Internal;
+        e.detail = ErrorDetail::RequestTooLarge;
         e.message = "Request body exceeds the 4 GiB limit of a single HTTP request";
         return VoidResult::Failure(e);
     }
@@ -254,6 +270,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
                     StorageError e;
                     e.kind = ErrorKind::LocalIo;
                     e.win32 = ::GetLastError();
+                    e.detail = ErrorDetail::LocalReadFailed;
                     e.message = "Local file read failed during upload";
                     return VoidResult::Failure(e);
                 }
@@ -334,6 +351,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = ::GetLastError();
+        e.detail = ErrorDetail::LocalCreateFailed;
         e.message = "Cannot create local file for download";
         return VoidResult::Failure(e);
     }
@@ -363,6 +381,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
                 StorageError e;
                 e.kind = ErrorKind::LocalIo;
                 e.win32 = ::GetLastError();
+                e.detail = ErrorDetail::LocalWriteFailed;
                 e.message = "Local file write failed during download";
                 return VoidResult::Failure(e);
             }
@@ -375,6 +394,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
             {
                 StorageError e;
                 e.kind = ErrorKind::Internal;
+                e.detail = ErrorDetail::ResponseTooLarge;
                 e.message = "Response body too large for in-memory handling";
                 return VoidResult::Failure(e);
             }
@@ -387,6 +407,7 @@ VoidResult HttpClient::Execute(const HttpRequest& req, HttpResponse& resp)
         StorageError e;
         e.kind = ErrorKind::LocalIo;
         e.win32 = ::GetLastError();
+        e.detail = ErrorDetail::LocalCloseFailed;
         e.message = "Closing downloaded file failed";
         return VoidResult::Failure(e);
     }

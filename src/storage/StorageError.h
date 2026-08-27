@@ -23,12 +23,49 @@ enum class ErrorKind
     Internal,
 };
 
+// Which failure this plugin raised itself. `kind` is too coarse to translate
+// from; the UI keys its localized text off this. Service errors leave it None.
+enum class ErrorDetail
+{
+    None = 0,
+
+    // Network / transport
+    Timeout,
+    DnsFailed,
+    ConnectFailed,
+    TlsFailed,
+
+    // Local file I/O
+    LocalOpenFailed,     // cannot open the file to upload
+    LocalRangeMissing,   // file no longer covers the byte range being sent
+    LocalReadFailed,
+    LocalCreateFailed,   // cannot create the download target
+    LocalWriteFailed,
+    LocalCloseFailed,
+    LocalMoveFailed,     // download finished but could not replace the target
+
+    // Protocol / payload
+    MalformedResponse,
+    IncompleteDownload,
+    MissingPartEtag,
+    RequestTooLarge,     // single request body would exceed 4 GiB
+    ResponseTooLarge,
+
+    // Multipart
+    MultipartEmptyObject,
+    MultipartObjectTooLarge,
+
+    // Configuration
+    NoStoredCredential,
+};
+
 struct StorageError
 {
     ErrorKind kind = ErrorKind::None;
+    ErrorDetail detail = ErrorDetail::None;
     int httpStatus = 0;
     std::string s3Code;      // e.g. "NoSuchKey"; empty when not an S3 XML error
-    std::string message;     // safe for display; must never contain credentials
+    std::string message;     // English diagnostic; the UI localizes instead
     unsigned long win32 = 0; // WinHTTP/Win32 error code when kind == Network/LocalIo
 
     bool Retryable() const
