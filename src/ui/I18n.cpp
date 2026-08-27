@@ -149,6 +149,18 @@ const wchar_t* const kEN[N] = {
 
     L"About NppS3",
     L"NppS3 %s\n\nAmazon S3 / Cloudflare R2 client for Notepad++.\nBrowse buckets, edit remote objects, auto-upload on save.\n\nLicense: GPL-3.0-or-later",
+
+    L"Download Folder...",
+    L"Abort Incomplete Uploads...",
+    L"Abort Upload",
+    L"List Uploads",
+    L"Download everything under %s to a local folder?",
+    L"Folder downloaded: %s (%d files, %d failed)",
+    L"Resuming interrupted upload: %s",
+    L"Upload stopped; it will continue where it left off: %s",
+    L"Abort all incomplete multipart uploads in %s?\nTheir already-uploaded parts are discarded.",
+    L"Aborted %d incomplete upload(s)",
+    L"No incomplete uploads found",
 };
 
 const wchar_t* const kKO[N] = {
@@ -291,6 +303,18 @@ const wchar_t* const kKO[N] = {
 
     L"NppS3 정보",
     L"NppS3 %s\n\nNotepad++용 Amazon S3 / Cloudflare R2 클라이언트.\n버킷 탐색, 원격 개체 편집, 저장 시 자동 업로드를 지원합니다.\n\n라이선스: GPL-3.0-or-later",
+
+    L"폴더 다운로드...",
+    L"미완료 업로드 정리...",
+    L"업로드 중단",
+    L"업로드 목록",
+    L"%s 아래의 모든 객체를 로컬 폴더로 내려받을까요?",
+    L"폴더 다운로드 완료: %s (파일 %d개, 실패 %d개)",
+    L"중단된 업로드를 이어서 진행합니다: %s",
+    L"업로드가 중단되었습니다. 다시 실행하면 이어서 진행합니다: %s",
+    L"%s의 미완료 멀티파트 업로드를 모두 중단할까요?\n이미 업로드된 조각은 삭제됩니다.",
+    L"미완료 업로드 %d개를 정리했습니다",
+    L"미완료 업로드가 없습니다",
 };
 
 const wchar_t* const kJA[N] = {
@@ -433,6 +457,18 @@ const wchar_t* const kJA[N] = {
 
     L"NppS3 について",
     L"NppS3 %s\n\nNotepad++ 用 Amazon S3 / Cloudflare R2 クライアント。\nバケットの参照、リモートオブジェクトの編集、保存時の自動アップロードに対応。\n\nライセンス: GPL-3.0-or-later",
+
+    L"フォルダーをダウンロード...",
+    L"未完了のアップロードを中止...",
+    L"アップロード中止",
+    L"アップロード一覧",
+    L"%s 配下のすべてのオブジェクトをローカルフォルダーへダウンロードしますか?",
+    L"フォルダーのダウンロードが完了しました: %s (ファイル %d 件、失敗 %d 件)",
+    L"中断されたアップロードを再開します: %s",
+    L"アップロードを中断しました。次回は続きから再開します: %s",
+    L"%s の未完了マルチパートアップロードをすべて中止しますか?\nアップロード済みのパートは破棄されます。",
+    L"未完了のアップロード %d 件を中止しました",
+    L"未完了のアップロードはありません",
 };
 
 const wchar_t* const kZH[N] = {
@@ -575,6 +611,18 @@ const wchar_t* const kZH[N] = {
 
     L"关于 NppS3",
     L"NppS3 %s\n\n适用于 Notepad++ 的 Amazon S3 / Cloudflare R2 客户端。\n支持浏览存储桶、编辑远程对象、保存时自动上传。\n\n许可证: GPL-3.0-or-later",
+
+    L"下载文件夹...",
+    L"清理未完成的上传...",
+    L"中止上传",
+    L"上传列表",
+    L"是否将 %s 下的所有对象下载到本地文件夹?",
+    L"文件夹下载完成: %s (文件 %d 个, 失败 %d 个)",
+    L"正在续传已中断的上传: %s",
+    L"上传已中断, 下次将从中断处继续: %s",
+    L"是否中止 %s 中所有未完成的分段上传?\n已上传的分段将被丢弃。",
+    L"已中止 %d 个未完成的上传",
+    L"没有未完成的上传",
 };
 
 const wchar_t* const kRU[N] = {
@@ -717,6 +765,18 @@ const wchar_t* const kRU[N] = {
 
     L"О NppS3",
     L"NppS3 %s\n\nКлиент Amazon S3 / Cloudflare R2 для Notepad++.\nПросмотр бакетов, редактирование удалённых объектов, автозагрузка при сохранении.\n\nЛицензия: GPL-3.0-or-later",
+
+    L"Скачать папку...",
+    L"Прервать незавершённые загрузки...",
+    L"Прервать загрузку",
+    L"Список загрузок",
+    L"Скачать все объекты из %s в локальную папку?",
+    L"Папка скачана: %s (файлов: %d, с ошибкой: %d)",
+    L"Возобновление прерванной отправки: %s",
+    L"Отправка прервана; при следующей попытке она продолжится: %s",
+    L"Прервать все незавершённые составные отправки в %s?\nУже отправленные части будут удалены.",
+    L"Прервано незавершённых отправок: %d",
+    L"Незавершённых отправок нет",
 };
 
 Lang g_lang = Lang::EN;

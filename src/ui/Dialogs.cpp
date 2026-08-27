@@ -705,4 +705,44 @@ ConflictChoice ShowConflictDialog(HWND parent, const std::wstring& key, bool rem
     return ConflictChoice::Cancel;
 }
 
+bool ShowFolderPicker(HWND parent, const wchar_t* title, std::wstring& path)
+{
+    // Notepad++ already initialises COM on its UI thread; both "already in
+    // this mode" and "different mode" mean COM is usable without our own init.
+    HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool needUninit = SUCCEEDED(init);
+
+    bool picked = false;
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                     IID_PPV_ARGS(&dialog))))
+    {
+        DWORD options = 0;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM);
+        if (title)
+            dialog->SetTitle(title);
+        if (SUCCEEDED(dialog->Show(parent)))
+        {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&item)))
+            {
+                PWSTR wide = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &wide)) && wide)
+                {
+                    path = wide;
+                    picked = true;
+                    ::CoTaskMemFree(wide);
+                }
+                item->Release();
+            }
+        }
+        dialog->Release();
+    }
+
+    if (needUninit)
+        ::CoUninitialize();
+    return picked;
+}
+
 } // namespace npps3

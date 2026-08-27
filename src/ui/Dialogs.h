@@ -35,6 +35,9 @@ bool ShowUploadDialog(HWND parent, HINSTANCE hInstance,
 bool ShowInputDialog(HWND parent, HINSTANCE hInstance,
                      const wchar_t* title, const wchar_t* label, std::wstring& value);
 
+// Folder chooser used by "download folder". Returns false on cancel.
+bool ShowFolderPicker(HWND parent, const wchar_t* title, std::wstring& path);
+
 enum class ConflictChoice { Overwrite, DownloadRemote, Cancel };
 
 // Save-time conflict prompt. remoteGone: the object vanished remotely.

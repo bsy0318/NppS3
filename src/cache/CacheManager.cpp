@@ -8,11 +8,8 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shlobj.h>
 
 #include <vector>
-
-#pragma comment(lib, "shell32.lib")
 
 namespace npps3 {
 namespace {
@@ -104,9 +101,71 @@ bool CacheManager::EnsureParentDirs(const std::wstring& filePath)
     size_t pos = filePath.find_last_of(L'\\');
     if (pos == std::wstring::npos)
         return false;
-    std::wstring dir = filePath.substr(0, pos);
-    int r = ::SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
-    return r == ERROR_SUCCESS || r == ERROR_ALREADY_EXISTS || r == ERROR_FILE_EXISTS;
+    return EnsureDirectoryTree(filePath.substr(0, pos));
+}
+
+bool CacheManager::EnsureDirectoryTree(const std::wstring& dir)
+{
+    if (dir.empty())
+        return false;
+
+    // Start past the root ("C:\", "\\?\C:\", "\\server\share\") so the loop
+    // never tries to create a drive or a UNC share.
+    size_t pos = 0;
+    if (dir.compare(0, 2, L"\\\\") == 0)
+    {
+        size_t seps = 0;
+        while (pos < dir.size() && seps < 4)
+        {
+            if (dir[pos] == L'\\')
+                ++seps;
+            ++pos;
+        }
+    }
+    else
+    {
+        size_t colon = dir.find(L':');
+        pos = colon == std::wstring::npos ? 0 : colon + 1;
+    }
+
+    for (;;)
+    {
+        size_t sep = dir.find(L'\\', pos + 1);
+        std::wstring level = sep == std::wstring::npos ? dir : dir.substr(0, sep);
+        if (!level.empty() && level.back() != L':')
+        {
+            if (!::CreateDirectoryW(level.c_str(), nullptr) &&
+                ::GetLastError() != ERROR_ALREADY_EXISTS)
+                return false;
+        }
+        if (sep == std::wstring::npos)
+            break;
+        pos = sep;
+    }
+    return true;
+}
+
+std::wstring CacheManager::RelativePathForKey(const std::string& key)
+{
+    // SplitKey drops empty segments, so "a//b/" yields "a\b" and a trailing
+    // slash (a folder marker) yields the directory path with no file name.
+    std::wstring out;
+    for (const std::string& segment : SplitKey(key, '/'))
+    {
+        if (!out.empty())
+            out.push_back(L'\\');
+        out += SanitizeComponent(Utf8ToWide(segment), 100);
+    }
+    return out;
+}
+
+std::wstring CacheManager::ExtendedPath(const std::wstring& absolutePath)
+{
+    if (absolutePath.size() < MAX_PATH || absolutePath.compare(0, 4, L"\\\\?\\") == 0)
+        return absolutePath;
+    if (absolutePath.compare(0, 2, L"\\\\") == 0)
+        return L"\\\\?\\UNC" + absolutePath.substr(1);
+    return L"\\\\?\\" + absolutePath;
 }
 
 int CacheManager::CleanupStale(int days,

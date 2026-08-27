@@ -48,6 +48,8 @@ constexpr int IDM_GEAR_SETTINGS = 3114;
 // re-enter that control's WM_COMMAND handler instead.
 constexpr int IDM_ROOT_CONNECT = 3115;
 constexpr int IDM_ROOT_PROFILES = 3116;
+constexpr int IDM_CTX_DOWNLOAD_FOLDER = 3117;
+constexpr int IDM_CTX_ABORT_UPLOADS = 3118;
 
 std::wstring FormatBytes(uint64_t bytes)
 {
@@ -89,6 +91,8 @@ const wchar_t* LocalizedOp(TransferOp op)
     case TransferOp::UploadBytes: return T(StrId::OpCreate);
     case TransferOp::Delete: return T(StrId::OpDelete);
     case TransferOp::Copy: return T(StrId::OpCopy);
+    case TransferOp::ListMultipartUploads: return T(StrId::OpListUploads);
+    case TransferOp::AbortMultipartUpload: return T(StrId::OpAbortUpload);
     }
     return L"?";
 }
@@ -376,6 +380,12 @@ void DockPanel::OnCommand(WPARAM wParam)
     case IDM_CTX_UPLOAD_HERE:
         plugin.UploadFileHereAsk(SelectedItem());
         break;
+    case IDM_CTX_DOWNLOAD_FOLDER:
+        plugin.DownloadPrefixAsk(SelectedItem());
+        break;
+    case IDM_CTX_ABORT_UPLOADS:
+        plugin.AbortIncompleteUploadsAsk(SelectedItem());
+        break;
     case IDM_CTX_REFRESH:
         plugin.RefreshNode(SelectedItem());
         break;
@@ -543,8 +553,10 @@ void DockPanel::OnTreeContextMenu(int x, int y)
         ::AppendMenuW(menu, MF_STRING, IDM_CTX_NEW_FILE, T(StrId::CtxNewFile));
         ::AppendMenuW(menu, MF_STRING, IDM_CTX_NEW_FOLDER, T(StrId::CtxNewFolder));
         ::AppendMenuW(menu, MF_STRING, IDM_CTX_UPLOAD_HERE, T(StrId::CtxUploadHere));
+        ::AppendMenuW(menu, MF_STRING, IDM_CTX_DOWNLOAD_FOLDER, T(StrId::CtxDownloadFolder));
         ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         ::AppendMenuW(menu, MF_STRING, IDM_CTX_REFRESH, T(StrId::CtxRefresh));
+        ::AppendMenuW(menu, MF_STRING, IDM_CTX_ABORT_UPLOADS, T(StrId::CtxAbortUploads));
         if (data->kind == NodeKind::Prefix)
         {
             ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);

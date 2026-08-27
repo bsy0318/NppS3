@@ -26,6 +26,20 @@ public:
     // Creates the parent directory chain for a cache file path.
     static bool EnsureParentDirs(const std::wstring& filePath);
 
+    // Creates a directory and every missing level above it. Unlike
+    // SHCreateDirectoryEx this accepts \\?\-prefixed paths, so a downloaded
+    // folder tree is not limited to MAX_PATH.
+    static bool EnsureDirectoryTree(const std::wstring& dir);
+
+    // Maps an object key to a relative Windows path, sanitizing each '/'
+    // segment. Returns empty for keys that name no file (folder markers,
+    // keys whose segments all sanitize away).
+    static std::wstring RelativePathForKey(const std::string& key);
+
+    // Adds the \\?\ prefix when an absolute path would otherwise exceed
+    // MAX_PATH. Returns the path unchanged when it already has a prefix.
+    static std::wstring ExtendedPath(const std::wstring& absolutePath);
+
     // Deletes cache files whose last write time is older than `days`, except
     // those for which keepPredicate returns true (e.g. still-open documents).
     // Returns the number of files removed.

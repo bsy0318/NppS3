@@ -13,6 +13,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 namespace npps3 {
@@ -66,6 +67,10 @@ public:
     void RefreshNode(HTREEITEM item);
     void OpenObject(HTREEITEM item);
     void DownloadObjectAs(HTREEITEM item);
+    // Downloads every object under a bucket/prefix into a chosen local folder.
+    void DownloadPrefixAsk(HTREEITEM item);
+    // Lists and aborts multipart uploads that were never completed.
+    void AbortIncompleteUploadsAsk(HTREEITEM item);
     void DeleteObjectAsk(HTREEITEM item);
     void DeletePrefixAsk(HTREEITEM item);
     void RenameObjectAsk(HTREEITEM item);
@@ -109,6 +114,26 @@ private:
         DeletePrefixItem,
         PropertiesHead,
         SaveConflictDownload,
+        DownloadPrefixPage,
+        DownloadPrefixItem,
+        ListIncompleteUploads,
+        AbortIncompleteUpload,
+    };
+
+    // Progress of a fan-out over many objects (folder download, bulk abort).
+    // Shared by the page job and every per-object job it spawns so the summary
+    // can be reported once the last one finishes.
+    enum class BulkKind { FolderDownload, AbortUploads };
+
+    struct BulkState
+    {
+        BulkKind kind = BulkKind::FolderDownload;
+        bool listing = true; // still paging the listing
+        int pending = 0;
+        int done = 0;
+        int failed = 0;
+        std::wstring label;
+        std::set<std::string> claimed; // dedupes work discovered twice
     };
 
     struct PendingAction
@@ -118,9 +143,9 @@ private:
         std::string bucket;
         std::string key;               // primary key/prefix
         std::string dstKey;            // rename target
-        std::wstring localPath;
+        std::wstring localPath;        // file target, or destination root for bulk jobs
         int page = 0;
-        std::shared_ptr<int> counter;  // shared across bulk deletes
+        std::shared_ptr<BulkState> bulk;
     };
 
     struct SaveState
@@ -145,6 +170,11 @@ private:
     void UpdateShowPanelCheck(bool shown);
     void ShowError(const StorageError& e, const std::wstring& contextMsg);
     void RefreshParentOfKey(const std::string& bucket, const std::string& key);
+    // Reports the summary once a bulk fan-out has no work left.
+    void FinishBulkIfDone(const PendingAction& action);
+    // Tells the user when an upload continues from, or can continue from, a
+    // partially uploaded object. `starting` distinguishes the two cases.
+    void LogUploadResumeHint(const std::string& bucket, const std::string& key, bool starting);
 
     NppData m_npp{};
     HINSTANCE m_hModule = nullptr;
@@ -157,6 +187,7 @@ private:
     ProfileManager m_profiles;
     RemoteDocumentManager m_documents;
     CacheManager m_cache;
+    FileUploadJournal m_uploadJournal;
     std::unique_ptr<TransferManager> m_transfers;
     DockPanel m_panel;
 

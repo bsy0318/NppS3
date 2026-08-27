@@ -26,6 +26,20 @@ std::wstring FormatMsg(const wchar_t* fmt, const std::wstring& arg)
     return buf;
 }
 
+std::wstring FormatMsg(const wchar_t* fmt, const std::wstring& arg, int a, int b)
+{
+    wchar_t buf[1024];
+    ::_snwprintf_s(buf, _TRUNCATE, fmt, arg.c_str(), a, b);
+    return buf;
+}
+
+std::wstring FormatMsg(const wchar_t* fmt, int value)
+{
+    wchar_t buf[256];
+    ::_snwprintf_s(buf, _TRUNCATE, fmt, value);
+    return buf;
+}
+
 void CopyTextToClipboard(HWND owner, const std::wstring& text)
 {
     if (!::OpenClipboard(owner))
@@ -123,6 +137,9 @@ void NppS3Plugin::OnReady()
     m_profiles.Load();
     m_documents.SetStoreFile(configDir + L"\\Documents.xml");
     m_documents.Load();
+    // Loaded before any transfer starts so an upload interrupted by a previous
+    // session can resume instead of restarting.
+    m_uploadJournal.SetFile(configDir + L"\\Uploads.xml");
 
     wchar_t localAppData[MAX_PATH]{};
     DWORD n = ::GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH);
@@ -145,6 +162,7 @@ void NppS3Plugin::OnReady()
     });
 
     m_transfers = std::make_unique<TransferManager>(this);
+    m_transfers->SetUploadJournal(&m_uploadJournal);
     m_transfers->Start();
 
     // Drop mappings whose cache file disappeared, then prune stale cache
@@ -393,6 +411,7 @@ void NppS3Plugin::CmdUploadCurrent()
     action.kind = ActionKind::UploadManual;
     action.bucket = res.bucket;
     action.key = res.key;
+    LogUploadResumeHint(res.bucket, res.key, true);
     Enqueue(std::move(req), action);
 }
 
@@ -738,6 +757,117 @@ void NppS3Plugin::DownloadObjectAs(HTREEITEM item)
     Enqueue(std::move(req), action);
 }
 
+void NppS3Plugin::DownloadPrefixAsk(HTREEITEM item)
+{
+    NodeData* data = m_panel.DataOf(item);
+    if (!data || !m_connected)
+        return;
+    if (data->kind != NodeKind::Prefix && data->kind != NodeKind::Bucket)
+        return;
+
+    // A bucket node downloads the profile's prefix scope, matching what the
+    // tree shows under it.
+    std::string prefix = data->key;
+    if (data->kind == NodeKind::Bucket)
+    {
+        const Profile* p = ActiveProfile();
+        prefix = (p && !p->defaultPrefix.empty()) ? p->defaultPrefix : std::string();
+    }
+
+    std::wstring label = prefix.empty() ? Utf8ToWide(data->bucket) : Utf8ToWide(prefix);
+    std::wstring msg = FormatMsg(T(StrId::MsgConfirmDownloadFolder), label);
+    if (::MessageBoxW(m_npp._nppHandle, msg.c_str(), T(StrId::PanelTitle),
+                      MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        return;
+
+    std::wstring dir;
+    if (!ShowFolderPicker(m_npp._nppHandle, T(StrId::CtxDownloadFolder), dir))
+        return;
+    while (!dir.empty() && dir.back() == L'\\')
+        dir.pop_back();
+
+    // Put the objects under a folder named after the prefix leaf so a download
+    // never scatters files directly into the chosen directory.
+    std::string leaf = LeafNameOf(prefix.empty() ? data->bucket : prefix);
+    if (!leaf.empty())
+        dir += L"\\" + CacheManager::SanitizeComponent(Utf8ToWide(leaf), 100);
+
+    TransferRequest req;
+    req.op = TransferOp::List;
+    req.s3 = m_activeConfig;
+    req.bucket = data->bucket;
+    req.prefix = prefix;
+    req.maxKeys = 1000;
+
+    PendingAction action;
+    action.kind = ActionKind::DownloadPrefixPage;
+    action.bucket = data->bucket;
+    action.key = prefix;
+    action.localPath = dir;
+    action.bulk = std::make_shared<BulkState>();
+    action.bulk->kind = BulkKind::FolderDownload;
+    action.bulk->label = label;
+    Enqueue(std::move(req), action);
+}
+
+void NppS3Plugin::AbortIncompleteUploadsAsk(HTREEITEM item)
+{
+    NodeData* data = m_panel.DataOf(item);
+    if (!data || !m_connected)
+        return;
+    if (data->kind != NodeKind::Prefix && data->kind != NodeKind::Bucket)
+        return;
+
+    std::string prefix = data->kind == NodeKind::Bucket ? std::string() : data->key;
+    std::wstring label = prefix.empty() ? Utf8ToWide(data->bucket) : Utf8ToWide(prefix);
+    std::wstring msg = FormatMsg(T(StrId::MsgConfirmAbortUploads), label);
+    if (::MessageBoxW(m_npp._nppHandle, msg.c_str(), T(StrId::PanelTitle),
+                      MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return;
+
+    auto bulk = std::make_shared<BulkState>();
+    bulk->kind = BulkKind::AbortUploads;
+    bulk->label = label;
+
+    // The journal knows the exact keys this installation started uploads for,
+    // which matters because some providers (MinIO) only answer
+    // ListMultipartUploads for a full object key, not an arbitrary prefix.
+    for (const UploadJournalEntry& entry : m_uploadJournal.Entries())
+    {
+        if (entry.bucket != data->bucket || !StartsWith(entry.key, prefix))
+            continue;
+        TransferRequest req;
+        req.op = TransferOp::AbortMultipartUpload;
+        req.s3 = m_activeConfig;
+        req.bucket = entry.bucket;
+        req.key = entry.key;
+        req.uploadId = entry.uploadId;
+
+        PendingAction a;
+        a.kind = ActionKind::AbortIncompleteUpload;
+        a.bucket = entry.bucket;
+        a.key = entry.key;
+        a.dstKey = entry.uploadId;
+        a.bulk = bulk;
+        bulk->claimed.insert(entry.key + "\n" + entry.uploadId);
+        ++bulk->pending;
+        Enqueue(std::move(req), a);
+    }
+
+    TransferRequest req;
+    req.op = TransferOp::ListMultipartUploads;
+    req.s3 = m_activeConfig;
+    req.bucket = data->bucket;
+    req.prefix = prefix;
+
+    PendingAction action;
+    action.kind = ActionKind::ListIncompleteUploads;
+    action.bucket = data->bucket;
+    action.key = prefix;
+    action.bulk = bulk;
+    Enqueue(std::move(req), action);
+}
+
 void NppS3Plugin::DeleteObjectAsk(HTREEITEM item)
 {
     NodeData* data = m_panel.DataOf(item);
@@ -785,7 +915,6 @@ void NppS3Plugin::DeletePrefixAsk(HTREEITEM item)
     action.kind = ActionKind::DeletePrefixPage;
     action.bucket = data->bucket;
     action.key = data->key;
-    action.counter = std::make_shared<int>(0);
     Enqueue(std::move(req), action);
 }
 
@@ -916,6 +1045,7 @@ void NppS3Plugin::UploadFileHereAsk(HTREEITEM item)
     action.kind = ActionKind::UploadManual;
     action.bucket = data->bucket;
     action.key = key;
+    LogUploadResumeHint(data->bucket, key, true);
     Enqueue(std::move(req), action);
 }
 
@@ -1287,6 +1417,7 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             a2.bucket = doc->bucket;
             a2.key = doc->key;
             a2.localPath = doc->localPath;
+            LogUploadResumeHint(doc->bucket, doc->key, true);
             Enqueue(std::move(req), a2);
         }
         else
@@ -1303,9 +1434,11 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             m_documents.Save();
             Log::Instance().Info(FormatMsg(T(StrId::MsgUploadDone), Utf8ToWide(action.key)));
         }
-        else if (!cancelled)
+        else
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            if (!cancelled)
+                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            LogUploadResumeHint(action.bucket, action.key, false);
         }
         FinishSave(action.localPath, true);
         break;
@@ -1337,9 +1470,11 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             Log::Instance().Info(FormatMsg(T(StrId::MsgUploadDone), Utf8ToWide(action.key)));
             RefreshParentOfKey(action.bucket, action.key);
         }
-        else if (!cancelled)
+        else
         {
-            ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            if (!cancelled)
+                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            LogUploadResumeHint(action.bucket, action.key, false);
         }
         break;
 
@@ -1450,6 +1585,150 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
             ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
         break;
 
+    case ActionKind::DownloadPrefixPage:
+        if (!action.bulk)
+            break;
+        if (ok && ev->result)
+        {
+            for (const ObjectInfo& obj : ev->result->listing.objects)
+            {
+                // The marker object for the prefix itself is the destination
+                // directory, not something below it.
+                if (obj.key.size() <= action.key.size())
+                    continue;
+                // A trailing slash marks a folder; it has no file content, but
+                // the directory itself is still worth creating.
+                std::wstring relative =
+                    CacheManager::RelativePathForKey(obj.key.substr(action.key.size()));
+                if (relative.empty())
+                    continue;
+                std::wstring target = CacheManager::ExtendedPath(action.localPath + L"\\" + relative);
+                if (!obj.key.empty() && obj.key.back() == '/')
+                {
+                    CacheManager::EnsureDirectoryTree(target);
+                    continue;
+                }
+                if (!CacheManager::EnsureParentDirs(target))
+                {
+                    ++action.bulk->failed;
+                    continue;
+                }
+
+                TransferRequest req;
+                req.op = TransferOp::Download;
+                req.s3 = m_activeConfig;
+                req.bucket = action.bucket;
+                req.key = obj.key;
+                req.localPath = target;
+
+                PendingAction a2;
+                a2.kind = ActionKind::DownloadPrefixItem;
+                a2.bucket = action.bucket;
+                a2.key = obj.key;
+                a2.localPath = target;
+                a2.bulk = action.bulk;
+                ++action.bulk->pending;
+                Enqueue(std::move(req), a2);
+            }
+
+            if (ev->result->listing.isTruncated &&
+                !ev->result->listing.nextContinuationToken.empty())
+            {
+                TransferRequest req;
+                req.op = TransferOp::List;
+                req.s3 = m_activeConfig;
+                req.bucket = action.bucket;
+                req.prefix = action.key;
+                req.continuationToken = ev->result->listing.nextContinuationToken;
+                req.maxKeys = 1000;
+                Enqueue(std::move(req), action);
+            }
+            else
+            {
+                action.bulk->listing = false;
+                FinishBulkIfDone(action);
+            }
+        }
+        else
+        {
+            action.bulk->listing = false;
+            if (!cancelled)
+                ShowError(ev->error, Utf8ToWide(ev->error.Describe()));
+            FinishBulkIfDone(action);
+        }
+        break;
+
+    case ActionKind::DownloadPrefixItem:
+        if (!action.bulk)
+            break;
+        if (ok)
+            ++action.bulk->done;
+        else
+        {
+            ++action.bulk->failed;
+            if (!cancelled)
+                Log::Instance().Error(Utf8ToWide(action.key + ": " + ev->error.Describe()));
+        }
+        --action.bulk->pending;
+        FinishBulkIfDone(action);
+        break;
+
+    case ActionKind::ListIncompleteUploads:
+        if (!action.bulk)
+            break;
+        if (ok && ev->result)
+        {
+            for (const MultipartUploadInfo& upload : ev->result->uploads)
+            {
+                if (!action.bulk->claimed.insert(upload.key + "\n" + upload.uploadId).second)
+                    continue;
+
+                TransferRequest req;
+                req.op = TransferOp::AbortMultipartUpload;
+                req.s3 = m_activeConfig;
+                req.bucket = action.bucket;
+                req.key = upload.key;
+                req.uploadId = upload.uploadId;
+
+                PendingAction a2;
+                a2.kind = ActionKind::AbortIncompleteUpload;
+                a2.bucket = action.bucket;
+                a2.key = upload.key;
+                a2.dstKey = upload.uploadId;
+                a2.bulk = action.bulk;
+                ++action.bulk->pending;
+                Enqueue(std::move(req), a2);
+            }
+        }
+        else if (!cancelled)
+        {
+            // Not every provider allows a prefix-wide query; the journal-driven
+            // aborts already enqueued still run.
+            Log::Instance().Warn(Utf8ToWide(ev->error.Describe()));
+        }
+        action.bulk->listing = false;
+        FinishBulkIfDone(action);
+        break;
+
+    case ActionKind::AbortIncompleteUpload:
+        if (!action.bulk)
+            break;
+        if (ok)
+        {
+            ++action.bulk->done;
+            m_uploadJournal.Remove(IUploadJournal::ScopeFor(m_activeConfig.endpoint,
+                                                            m_activeConfig.accessKeyId),
+                                   action.bucket, action.key);
+        }
+        else if (!cancelled)
+        {
+            ++action.bulk->failed;
+            Log::Instance().Error(Utf8ToWide(action.key + ": " + ev->error.Describe()));
+        }
+        --action.bulk->pending;
+        FinishBulkIfDone(action);
+        break;
+
     case ActionKind::PropertiesHead:
         if (ok && ev->result)
         {
@@ -1481,6 +1760,42 @@ void NppS3Plugin::HandleTransferEventUi(TransferEvent* evPtr)
     case ActionKind::None:
     default:
         break;
+    }
+}
+
+void NppS3Plugin::LogUploadResumeHint(const std::string& bucket, const std::string& key,
+                                      bool starting)
+{
+    // Matching on bucket+key is enough for a log hint; the resume itself is
+    // still scoped to the credentials that started the upload.
+    bool resumable = false;
+    for (const UploadJournalEntry& entry : m_uploadJournal.Entries())
+        if (entry.bucket == bucket && entry.key == key)
+            resumable = true;
+    if (!resumable)
+        return;
+    Log::Instance().Info(FormatMsg(
+        T(starting ? StrId::MsgUploadResuming : StrId::MsgUploadResumable), Utf8ToWide(key)));
+}
+
+void NppS3Plugin::FinishBulkIfDone(const PendingAction& action)
+{
+    const std::shared_ptr<BulkState>& bulk = action.bulk;
+    if (!bulk || bulk->listing || bulk->pending > 0)
+        return;
+
+    if (bulk->kind == BulkKind::FolderDownload)
+    {
+        Log::Instance().Info(FormatMsg(T(StrId::MsgFolderDownloadDone), bulk->label,
+                                       bulk->done, bulk->failed));
+    }
+    else if (bulk->done > 0 || bulk->failed > 0)
+    {
+        Log::Instance().Info(FormatMsg(T(StrId::MsgAbortUploadsDone), bulk->done));
+    }
+    else
+    {
+        Log::Instance().Info(T(StrId::MsgNoIncompleteUploads));
     }
 }
 

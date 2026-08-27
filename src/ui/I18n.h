@@ -177,6 +177,19 @@ enum class StrId
     AboutTitle,
     AboutBody,
 
+    // Folder download and incomplete multipart uploads
+    CtxDownloadFolder,
+    CtxAbortUploads,
+    OpAbortUpload,
+    OpListUploads,
+    MsgConfirmDownloadFolder, // %s = prefix
+    MsgFolderDownloadDone,    // %s = prefix, %d = downloaded, %d = failed
+    MsgUploadResuming,        // %s = key
+    MsgUploadResumable,       // %s = key
+    MsgConfirmAbortUploads,   // %s = bucket
+    MsgAbortUploadsDone,      // %d = count
+    MsgNoIncompleteUploads,
+
     COUNT_,
 };
 

@@ -5,6 +5,8 @@
 
 #include "cache/CacheManager.h"
 
+#include <algorithm>
+
 using namespace npps3;
 
 TEST_CASE("SanitizeComponent replaces invalid Windows characters")
@@ -75,4 +77,60 @@ TEST_CASE("LocalPathFor stays well under Windows MAX_PATH pressure")
     longKey += "/leaf-with-a-rather-long-name-exceeding-limits-1234567890.markdown";
     std::wstring p = cache.LocalPathFor("profile-guid-here", "bucket-name", longKey);
     CHECK(p.size() < 260);
+}
+
+TEST_CASE("RelativePathForKey maps object keys onto a safe local tree")
+{
+    SUBCASE("nested keys become nested directories")
+    {
+        CHECK(CacheManager::RelativePathForKey("a/b/c.txt") == L"a\\b\\c.txt");
+        CHECK(CacheManager::RelativePathForKey("flat.txt") == L"flat.txt");
+    }
+
+    SUBCASE("a folder marker maps to the directory, not a file")
+    {
+        CHECK(CacheManager::RelativePathForKey("a/b/") == L"a\\b");
+        CHECK(CacheManager::RelativePathForKey("").empty());
+    }
+
+    SUBCASE("empty segments collapse instead of producing an empty level")
+    {
+        CHECK(CacheManager::RelativePathForKey("a//b.txt") == L"a\\b.txt");
+    }
+
+    SUBCASE("characters Windows forbids in a name are replaced")
+    {
+        std::wstring p = CacheManager::RelativePathForKey("dir/a:b?c*d|e.txt");
+        CHECK(p == L"dir\\a_b_c_d_e.txt");
+        // Separators come from the key's '/', never from its content.
+        CHECK(std::count(p.begin(), p.end(), L'\\') == 1);
+    }
+
+    SUBCASE("a key cannot escape the destination directory")
+    {
+        std::wstring p = CacheManager::RelativePathForKey("../../etc/passwd");
+        CHECK(p.find(L"..") == std::wstring::npos);
+    }
+
+    SUBCASE("unicode segments survive")
+    {
+        // 한글/테스트.json
+        CHECK(CacheManager::RelativePathForKey(
+                  "\xed\x95\x9c\xea\xb8\x80/\xed\x85\x8c\xec\x8a\xa4\xed\x8a\xb8.json") ==
+              L"\ud55c\uae00\\\ud14c\uc2a4\ud2b8.json");
+    }
+}
+
+TEST_CASE("ExtendedPath lifts the MAX_PATH limit only when needed")
+{
+    CHECK(CacheManager::ExtendedPath(L"C:\\short\\path.txt") == L"C:\\short\\path.txt");
+
+    const std::wstring deep = L"C:\\dir\\" + std::wstring(300, L'x') + L".txt";
+    CHECK(CacheManager::ExtendedPath(deep) == L"\\\\?\\" + deep);
+    // Already-prefixed paths are left alone.
+    CHECK(CacheManager::ExtendedPath(L"\\\\?\\" + deep) == L"\\\\?\\" + deep);
+
+    const std::wstring unc = L"\\\\server\\share\\" + std::wstring(300, L'y') + L".txt";
+    CHECK(CacheManager::ExtendedPath(unc) ==
+          L"\\\\?\\UNC\\server\\share\\" + std::wstring(300, L'y') + L".txt");
 }
