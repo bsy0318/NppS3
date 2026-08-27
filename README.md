@@ -6,6 +6,8 @@ You can browse buckets and objects from a docked panel, open remote objects in N
 
 It is useful for making quick changes to configuration files, small scripts, static site files, and similar content stored in S3 or R2. NppS3 is intended as an object storage browser and editor rather than a synchronization or backup tool.
 
+*[한국어 문서](README.ko-KR.md)*
+
 ---
 
 ## Features
