@@ -3,9 +3,6 @@
 .env.*
 !.env.example
 
-# Markdown files are excluded from commits (user policy)
-*.md
-
 # Build output
 build/
 out/
