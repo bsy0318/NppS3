@@ -147,6 +147,25 @@ int wmain(int argc, wchar_t** argv)
         std::printf(r.ok ? "ok\n" : "FAIL %s\n", r.ok ? "" : r.error.Describe().c_str());
         return r.ok ? 0 : 1;
     }
+    if (op == "list" && argc == 4)
+    {
+        std::string bucket = WideToUtf8(argv[2]);
+        std::string prefix = WideToUtf8(argv[3]);
+        std::string token;
+        do
+        {
+            auto r = client.ListObjects(bucket, prefix, "", token, 1000);
+            if (!r.ok)
+            {
+                std::printf("FAIL %s\n", r.error.Describe().c_str());
+                return 1;
+            }
+            for (const auto& o : r.value.objects)
+                std::printf("%s\n", o.key.c_str());
+            token = r.value.isTruncated ? r.value.nextContinuationToken : std::string();
+        } while (!token.empty());
+        return 0;
+    }
     if (op == "head" && argc == 4)
     {
         auto r = client.HeadObject(WideToUtf8(argv[2]), WideToUtf8(argv[3]));
