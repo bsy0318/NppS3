@@ -15,25 +15,25 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }}
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x64
             platform: x64
-            runnable: true
+            runner: windows-latest
           - arch: x86
             platform: Win32
-            runnable: true
+            runner: windows-latest
           - arch: arm64
             platform: ARM64
-            # An x64 runner cannot execute ARM64 binaries; this job proves the
-            # tree compiles and links, and the artifact is tested on hardware.
-            runnable: false
+            # Native ARM64 host, so the unit tests run here rather than the
+            # build only proving that the tree compiles and links.
+            runner: windows-11-vs2026-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No -G: the default generator follows whichever Visual Studio the runner
       # image ships, so a new image does not break the build.
@@ -44,7 +44,6 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Unit tests
-        if: matrix.runnable
         run: .\build\Release\npps3_tests.exe
 
       - name: Stage plugin
@@ -53,15 +52,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path stage/NppS3 | Out-Null
           Copy-Item build/Release/NppS3.dll stage/NppS3/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: NppS3-${{ matrix.arch }}
           path: stage/NppS3/NppS3.dll
           if-no-files-found: error
 
       - name: Upload test tools
-        if: matrix.runnable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npps3-tools-${{ matrix.arch }}
           path: |
@@ -74,9 +72,9 @@ jobs:
     runs-on: windows-latest
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npps3-tools-x64
           path: tools

@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.21)
 project(NppS3 VERSION 0.1.0 LANGUAGES CXX)
 
 if(NOT MSVC)
-    message(FATAL_ERROR "NppS3 targets Windows/MSVC (Visual Studio 2022).")
+    message(FATAL_ERROR "NppS3 targets Windows/MSVC (Visual Studio 2022 or newer).")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

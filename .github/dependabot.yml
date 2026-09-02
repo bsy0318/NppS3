@@ -1,0 +1,17 @@
+# NppS3 — keep the GitHub Actions used by CI and Release up to date.
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Actions are the only versioned dependency here: the C++ side vendors its
+# third party sources under third_party/ and has no package manifest.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # One pull request for the whole set rather than one per action.
+    groups:
+      actions:
+        patterns:
+          - "*"

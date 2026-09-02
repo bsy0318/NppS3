@@ -33,7 +33,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # tags decide whether this version is already out
 
@@ -57,7 +57,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.arch }}
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     needs: check
     if: needs.check.outputs.release == 'true'
     strategy:
@@ -66,16 +66,18 @@ jobs:
         include:
           - arch: x64
             platform: x64
-            runnable: true
+            runner: windows-latest
           - arch: x86
             platform: Win32
-            runnable: true
+            runner: windows-latest
           - arch: arm64
             platform: ARM64
-            runnable: false
+            # Native ARM64 host, so the unit tests run here rather than the
+            # build only proving that the tree compiles and links.
+            runner: windows-11-vs2026-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No -G: the default generator follows whichever Visual Studio the runner
       # image ships, so a new image does not break the build.
@@ -86,7 +88,6 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Unit tests
-        if: matrix.runnable
         run: .\build\Release\npps3_tests.exe
 
       - name: Package
@@ -103,7 +104,7 @@ jobs:
           $hash = (Get-FileHash "pkg/$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Out-File -FilePath "pkg/$name.zip.sha256" -Encoding ascii
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-${{ matrix.arch }}
           path: |
@@ -116,9 +117,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check, build]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: package-*
           merge-multiple: true
